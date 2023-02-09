@@ -9,6 +9,12 @@ local ss_encrypt_method_list = {
     "xchacha20-ietf-poly1305"
 }
 
+local ss_rust_encrypt_method_list = {
+    "plain", "none",
+    "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
+    "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha8-poly1305", "2022-blake3-chacha20-poly1305"
+}
+
 local ssr_encrypt_method_list = {
     "none", "table", "rc2-cfb", "rc4", "rc4-md5", "rc4-md5-6", "aes-128-cfb",
     "aes-192-cfb", "aes-256-cfb", "aes-128-ctr", "aes-192-ctr", "aes-256-ctr",
@@ -30,6 +36,10 @@ local ssr_obfs_list = {
 
 local v_ss_encrypt_method_list = {
     "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305"
+}
+
+local x_ss_encrypt_method_list = {
+    "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305", "xchacha20-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"
 }
 
 local header_type_list = {
@@ -63,6 +73,9 @@ if api.is_finded("microsocks") then
 end
 if api.is_finded("ss-server") then
     type:value("SS", translate("Shadowsocks"))
+end
+if api.is_finded("ssserver") then
+    type:value("SS-Rust", translate("Shadowsocks Rust"))
 end
 if api.is_finded("ssr-server") then
     type:value("SSR", translate("ShadowsocksR"))
@@ -146,6 +159,7 @@ password = s:option(Value, "password", translate("Password"))
 password.password = true
 password:depends("auth", true)
 password:depends("type", "SS")
+password:depends("type", "SS-Rust")
 password:depends("type", "SSR")
 password:depends("type", "Brook")
 password:depends({ type = "V2ray", protocol = "shadowsocks" })
@@ -183,6 +197,18 @@ decryption.default = "none"
 decryption:depends({ type = "V2ray", protocol = "vless" })
 decryption:depends({ type = "Xray", protocol = "vless" })
 
+hysteria_protocol = s:option(ListValue, "hysteria_protocol", translate("Protocol"))
+hysteria_protocol:value("udp", "UDP")
+hysteria_protocol:value("faketcp", "faketcp")
+hysteria_protocol:value("wechat-video", "wechat-video")
+hysteria_protocol:depends("type", "Hysteria")
+function hysteria_protocol.cfgvalue(self, section)
+	return m:get(section, "protocol")
+end
+function hysteria_protocol.write(self, section, value)
+	m:set(section, "protocol", value)
+end
+
 hysteria_obfs = s:option(Value, "hysteria_obfs", translate("Obfs Password"))
 hysteria_obfs:depends("type", "Hysteria")
 
@@ -195,9 +221,29 @@ hysteria_auth_password = s:option(Value, "hysteria_auth_password", translate("Au
 hysteria_auth_password.password = true
 hysteria_auth_password:depends("hysteria_auth_type", "string")
 
+hysteria_alpn = s:option(Value, "hysteria_alpn", translate("QUIC TLS ALPN"))
+hysteria_alpn:depends("type", "Hysteria")
+
 hysteria_udp = s:option(Flag, "hysteria_udp", translate("UDP"))
 hysteria_udp.default = "1"
 hysteria_udp:depends("type", "Hysteria")
+
+hysteria_up_mbps = s:option(Value, "hysteria_up_mbps", translate("Max upload Mbps"))
+hysteria_up_mbps.default = "10"
+hysteria_up_mbps:depends("type", "Hysteria")
+
+hysteria_down_mbps = s:option(Value, "hysteria_down_mbps", translate("Max download Mbps"))
+hysteria_down_mbps.default = "50"
+hysteria_down_mbps:depends("type", "Hysteria")
+
+hysteria_recv_window_conn = s:option(Value, "hysteria_recv_window_conn", translate("QUIC stream receive window"))
+hysteria_recv_window_conn:depends("type", "Hysteria")
+
+hysteria_recv_window = s:option(Value, "hysteria_recv_window", translate("QUIC connection receive window"))
+hysteria_recv_window:depends("type", "Hysteria")
+
+hysteria_disable_mtu_discovery = s:option(Flag, "hysteria_disable_mtu_discovery", translate("Disable MTU detection"))
+hysteria_disable_mtu_discovery:depends("type", "Hysteria")
 
 ss_encrypt_method = s:option(ListValue, "ss_encrypt_method", translate("Encrypt Method"))
 for a, t in ipairs(ss_encrypt_method_list) do ss_encrypt_method:value(t) end
@@ -206,6 +252,16 @@ function ss_encrypt_method.cfgvalue(self, section)
 	return m:get(section, "method")
 end
 function ss_encrypt_method.write(self, section, value)
+	m:set(section, "method", value)
+end
+
+ss_rust_encrypt_method = s:option(ListValue, "ss_rust_encrypt_method", translate("Encrypt Method"))
+for a, t in ipairs(ss_rust_encrypt_method_list) do ss_rust_encrypt_method:value(t) end
+ss_rust_encrypt_method:depends("type", "SS-Rust")
+function ss_rust_encrypt_method.cfgvalue(self, section)
+	return m:get(section, "method")
+end
+function ss_rust_encrypt_method.write(self, section, value)
 	m:set(section, "method", value)
 end
 
@@ -222,13 +278,26 @@ end
 v_ss_encrypt_method = s:option(ListValue, "v_ss_encrypt_method", translate("Encrypt Method"))
 for a, t in ipairs(v_ss_encrypt_method_list) do v_ss_encrypt_method:value(t) end
 v_ss_encrypt_method:depends({ type = "V2ray", protocol = "shadowsocks" })
-v_ss_encrypt_method:depends({ type = "Xray", protocol = "shadowsocks" })
 function v_ss_encrypt_method.cfgvalue(self, section)
 	return m:get(section, "method")
 end
 function v_ss_encrypt_method.write(self, section, value)
 	m:set(section, "method", value)
 end
+
+x_ss_encrypt_method = s:option(ListValue, "x_ss_encrypt_method", translate("Encrypt Method"))
+for a, t in ipairs(x_ss_encrypt_method_list) do x_ss_encrypt_method:value(t) end
+x_ss_encrypt_method:depends({ type = "Xray", protocol = "shadowsocks" })
+function x_ss_encrypt_method.cfgvalue(self, section)
+	return m:get(section, "method")
+end
+function x_ss_encrypt_method.write(self, section, value)
+	m:set(section, "method", value)
+end
+
+iv_check = s:option(Flag, "iv_check", translate("IV Check"))
+iv_check:depends({ type = "V2ray", protocol = "shadowsocks" })
+iv_check:depends({ type = "Xray", protocol = "shadowsocks" })
 
 ss_network = s:option(ListValue, "ss_network", translate("Transport"))
 ss_network.default = "tcp,udp"
@@ -262,6 +331,7 @@ timeout = s:option(Value, "timeout", translate("Connection Timeout"))
 timeout.datatype = "uinteger"
 timeout.default = 300
 timeout:depends("type", "SS")
+timeout:depends("type", "SS-Rust")
 timeout:depends("type", "SSR")
 
 udp_forward = s:option(Flag, "udp_forward", translate("UDP Forward"))
@@ -284,10 +354,6 @@ uuid:depends({ type = "Xray", protocol = "trojan" })
 uuid:depends("type", "Trojan")
 uuid:depends("type", "Trojan-Go")
 uuid:depends("type", "Trojan-Plus")
-
-alter_id = s:option(Value, "alter_id", translate("Alter ID"))
-alter_id:depends({ type = "V2ray", protocol = "vmess" })
-alter_id:depends({ type = "Xray", protocol = "vmess" })
 
 tls = s:option(Flag, "tls", translate("TLS"))
 tls.default = 0
@@ -321,18 +387,12 @@ tls:depends("type", "Trojan")
 tls:depends("type", "Trojan-Plus")
 tls:depends("type", "Trojan-Go")
 
-xtls = s:option(Flag, "xtls", translate("XTLS"))
-xtls.default = 0
-xtls:depends({ type = "Xray", protocol = "vless", tls = true })
-xtls:depends({ type = "Xray", protocol = "trojan", tls = true })
-
-flow = s:option(Value, "flow", translate("flow"))
-flow.default = "xtls-rprx-direct"
-flow:value("xtls-rprx-origin")
-flow:value("xtls-rprx-origin-udp443")
-flow:value("xtls-rprx-direct")
-flow:value("xtls-rprx-direct-udp443")
-flow:depends("xtls", true)
+tlsflow = s:option(Value, "tlsflow", translate("flow"))
+tlsflow.default = ""
+tlsflow:value("", translate("Disable"))
+tlsflow:value("xtls-rprx-vision")
+tlsflow:value("xtls-rprx-vision-udp443")
+tlsflow:depends({ type = "Xray", protocol = "vless", tls = true })
 
 alpn = s:option(ListValue, "alpn", translate("alpn"))
 alpn.default = "h2,http/1.1"
@@ -341,6 +401,11 @@ alpn:value("h2")
 alpn:value("http/1.1")
 alpn:depends({ type = "V2ray", tls = true })
 alpn:depends({ type = "Xray", tls = true })
+
+-- minversion = s:option(Value, "minversion", translate("minversion"))
+-- minversion.default = "1.3"
+-- minversion:value("1.3")
+-- minversion:depends("tls", true)
 
 -- [[ TLS部分 ]] --
 
@@ -574,6 +639,7 @@ ss_aead_pwd:depends("ss_aead", true)
 tcp_fast_open = s:option(Flag, "tcp_fast_open", translate("TCP Fast Open"))
 tcp_fast_open.default = "0"
 tcp_fast_open:depends("type", "SS")
+tcp_fast_open:depends("type", "SS-Rust")
 tcp_fast_open:depends("type", "SSR")
 tcp_fast_open:depends("type", "Trojan")
 tcp_fast_open:depends("type", "Trojan-Plus")
@@ -602,18 +668,8 @@ bind_local:depends("type", "Xray")
 
 accept_lan = s:option(Flag, "accept_lan", translate("Accept LAN Access"), translate("When selected, it can accessed lan , this will not be safe!"))
 accept_lan.default = "0"
-accept_lan:depends({ type = "V2ray", protocol = "vmess" })
-accept_lan:depends({ type = "V2ray", protocol = "vless" })
-accept_lan:depends({ type = "V2ray", protocol = "http" })
-accept_lan:depends({ type = "V2ray", protocol = "socks" })
-accept_lan:depends({ type = "V2ray", protocol = "shadowsocks" })
-accept_lan:depends({ type = "V2ray", protocol = "trojan" })
-accept_lan:depends({ type = "Xray", protocol = "vmess" })
-accept_lan:depends({ type = "Xray", protocol = "vless" })
-accept_lan:depends({ type = "Xray", protocol = "http" })
-accept_lan:depends({ type = "Xray", protocol = "socks" })
-accept_lan:depends({ type = "Xray", protocol = "shadowsocks" })
-accept_lan:depends({ type = "Xray", protocol = "trojan" })
+accept_lan:depends("type", "V2ray")
+accept_lan:depends("type", "Xray")
 
 local nodes_table = {}
 for k, e in ipairs(api.get_valid_nodes()) do
@@ -625,32 +681,37 @@ for k, e in ipairs(api.get_valid_nodes()) do
     end
 end
 
-transit_node = s:option(ListValue, "transit_node", translate("transit node"))
-transit_node:value("nil", translate("Close"))
-transit_node:value("_socks", translate("Custom Socks"))
-transit_node:value("_http", translate("Custom HTTP"))
-for k, v in pairs(nodes_table) do transit_node:value(v.id, v.remarks) end
-transit_node.default = "nil"
-transit_node:depends("type", "V2ray")
-transit_node:depends("type", "Xray")
+outbound_node = s:option(ListValue, "outbound_node", translate("outbound node"))
+outbound_node:value("nil", translate("Close"))
+outbound_node:value("_socks", translate("Custom Socks"))
+outbound_node:value("_http", translate("Custom HTTP"))
+outbound_node:value("_iface", translate("Custom Interface") .. " (Only Support Xray)")
+for k, v in pairs(nodes_table) do outbound_node:value(v.id, v.remarks) end
+outbound_node.default = "nil"
+outbound_node:depends("type", "V2ray")
+outbound_node:depends("type", "Xray")
 
-transit_node_address = s:option(Value, "transit_node_address", translate("Address (Support Domain Name)"))
-transit_node_address:depends("transit_node", "_socks")
-transit_node_address:depends("transit_node", "_http")
+outbound_node_address = s:option(Value, "outbound_node_address", translate("Address (Support Domain Name)"))
+outbound_node_address:depends("outbound_node", "_socks")
+outbound_node_address:depends("outbound_node", "_http")
 
-transit_node_port = s:option(Value, "transit_node_port", translate("Port"))
-transit_node_port.datatype = "port"
-transit_node_port:depends("transit_node", "_socks")
-transit_node_port:depends("transit_node", "_http")
+outbound_node_port = s:option(Value, "outbound_node_port", translate("Port"))
+outbound_node_port.datatype = "port"
+outbound_node_port:depends("outbound_node", "_socks")
+outbound_node_port:depends("outbound_node", "_http")
 
-transit_node_username = s:option(Value, "transit_node_username", translate("Username"))
-transit_node_username:depends("transit_node", "_socks")
-transit_node_username:depends("transit_node", "_http")
+outbound_node_username = s:option(Value, "outbound_node_username", translate("Username"))
+outbound_node_username:depends("outbound_node", "_socks")
+outbound_node_username:depends("outbound_node", "_http")
 
-transit_node_password = s:option(Value, "transit_node_password", translate("Password"))
-transit_node_password.password = true
-transit_node_password:depends("transit_node", "_socks")
-transit_node_password:depends("transit_node", "_http")
+outbound_node_password = s:option(Value, "outbound_node_password", translate("Password"))
+outbound_node_password.password = true
+outbound_node_password:depends("outbound_node", "_socks")
+outbound_node_password:depends("outbound_node", "_http")
+
+outbound_node_iface = s:option(Value, "outbound_node_iface", translate("Interface"))
+outbound_node_iface.default = "eth1"
+outbound_node_iface:depends("outbound_node", "_iface")
 
 log = s:option(Flag, "log", translate("Log"))
 log.default = "1"

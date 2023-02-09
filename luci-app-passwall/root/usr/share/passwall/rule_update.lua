@@ -5,10 +5,9 @@ require 'luci.sys'
 local luci = luci
 local ucic = luci.model.uci.cursor()
 local jsonc = require "luci.jsonc"
-local i18n = require "luci.i18n"
 local name = 'passwall'
+local api = require ("luci.model.cbi." .. name .. ".api.api")
 local arg1 = arg[1]
-local b64decode = nixio.bin.b64decode
 
 local rule_path = "/usr/share/" .. name .. "/rules"
 local reboot = 0
@@ -27,13 +26,13 @@ local ip6_ipset_pattern = ":-[%x]+%:+[%x]-[%/][%d]+$"
 local domain_pattern = "([%w%-%_]+%.[%w%.%-%_]+)[%/%*]*"
 local excluded_domain = {"apple.com","sina.cn","sina.com.cn","baidu.com","byr.cn","jlike.com","weibo.com","zhongsou.com","youdao.com","sogou.com","so.com","soso.com","aliyun.com","taobao.com","jd.com","qq.com","bing.com"}
 
-local gfwlist_url = ucic:get(name, "@global_rules[0]", "gfwlist_url") or {"https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/gfw.txt"}
+local gfwlist_url = ucic:get(name, "@global_rules[0]", "gfwlist_url") or {"https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/gfw.txt"}
 local chnroute_url = ucic:get(name, "@global_rules[0]", "chnroute_url") or {"https://ispip.clang.cn/all_cn.txt"}
 local chnroute6_url =  ucic:get(name, "@global_rules[0]", "chnroute6_url") or {"https://ispip.clang.cn/all_cn_ipv6.txt"}
-local chnlist_url = ucic:get(name, "@global_rules[0]", "chnlist_url") or {"https://cdn.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/accelerated-domains.china.conf","https://cdn.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/apple.china.conf","https://cdn.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/google.china.conf"}
+local chnlist_url = ucic:get(name, "@global_rules[0]", "chnlist_url") or {"https://fastly.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/accelerated-domains.china.conf","https://fastly.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/apple.china.conf","https://fastly.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/google.china.conf"}
 local geoip_api =  "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest"
 local geosite_api =  "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest"
-local v2ray_asset_location = ucic:get_first(name, 'global_rules', "v2ray_location_asset", "/usr/share/xray/")
+local v2ray_asset_location = ucic:get_first(name, 'global_rules', "v2ray_location_asset", "/usr/share/v2ray/")
 
 local log = function(...)
     if arg1 then
@@ -50,24 +49,6 @@ local log = function(...)
     end
 end
 
--- base64decoding
-local function base64Decode(text)
-	local raw = text
-	if not text then return '' end
-	text = text:gsub("%z", "")
-	text = text:gsub("%c", "")
-	text = text:gsub("_", "/")
-	text = text:gsub("-", "+")
-	local mod4 = #text % 4
-	text = text .. string.sub('====', mod4 + 1)
-	local result = b64decode(text)
-	if result then
-		return result:gsub("%z", "")
-	else
-		return raw
-	end
-end
-
 -- trim
 local function trim(text)
     if not text or text == "" then return "" end
@@ -75,17 +56,22 @@ local function trim(text)
 end
 
 -- curl
-local function curl(url, file)
-	local cmd = "curl -skL -w %{http_code} --retry 3 --connect-timeout 3 '" .. url .. "'"
+local function curl(url, file, valifile)
+	local args = {
+		"-sKL", "-w %{http_code}", "--retry 3", "--connect-timeout 3"
+	}
 	if file then
-		cmd = cmd .. " -o " .. file
+		args[#args + 1] = "-o " .. file
 	end
-	local stdout = luci.sys.exec(cmd)
+	if valifile then
+		args[#args + 1] = "--dump-header " .. valifile
+	end
+	local result = api.curl_logic(url, nil, args)
 
 	if file then
-		return tonumber(trim(stdout))
+		return tonumber(trim(result))
 	else
-		return trim(stdout)
+		return trim(result)
 	end
 end
 
@@ -106,23 +92,56 @@ local function line_count(file_path)
 	return num;
 end
 
+local function non_file_check(file_path, vali_file)
+	if nixio.fs.readfile(file_path, 10) then
+		local remote_file_size = tonumber(luci.sys.exec("cat " .. vali_file .. " | grep -i 'Content-Length' | awk '{print $2}'"))
+		local local_file_size = tonumber(nixio.fs.stat(file_path, "size"))
+		if remote_file_size and local_file_size then
+			if remote_file_size == local_file_size then
+				return nil;
+			else
+				log("下载文件大小校验出错，原始文件大小" .. remote_file_size .. "B，下载文件大小：" .. local_file_size .. "B。")
+				return true;
+			end
+		else
+			return nil;
+		end
+	else
+		log("下载文件读取出错。")
+		return true;
+	end
+end
+
 --fetch rule
 local function fetch_rule(rule_name,rule_type,url,exclude_domain)
 	local sret = 200
 	local sret_tmp = 0
 	local domains = {}
 	local file_tmp = "/tmp/" ..rule_name.. "_tmp"
+	local vali_file = "/tmp/" ..rule_name.. "_vali"
 	local download_file_tmp = "/tmp/" ..rule_name.. "_dl"
 	local unsort_file_tmp = "/tmp/" ..rule_name.. "_unsort"
 
 	log(rule_name.. " 开始更新...")
 	for k,v in ipairs(url) do
-		sret_tmp = curl(v, download_file_tmp..k)
+		sret_tmp = curl(v, download_file_tmp..k, vali_file..k)
+		if sret_tmp == 200 and non_file_check(download_file_tmp..k, vali_file..k) then
+			log(rule_name.. " 第" ..k.. "条规则:" ..v.. "下载文件过程出错，尝试重新下载。")
+			os.remove(download_file_tmp..k)
+			os.remove(vali_file..k)
+			sret_tmp = curl(v, download_file_tmp..k, vali_file..k)
+			if sret_tmp == 200 and non_file_check(download_file_tmp..k, vali_file..k) then
+				sret = 0
+				sret_tmp = 0
+				log(rule_name.. " 第" ..k.. "条规则:" ..v.. "下载文件过程出错，请检查网络或下载链接后重试！")
+			end
+		end
+
 		if sret_tmp == 200 then
 			if rule_name == "gfwlist" then
 				local domains = {}
 				local gfwlist = io.open(download_file_tmp..k, "r")
-				local decode = base64Decode(gfwlist:read("*all"))
+				local decode = api.base64Decode(gfwlist:read("*all"))
 				gfwlist:close()
 
 				gfwlist = io.open(download_file_tmp..k, "w")
@@ -171,11 +190,12 @@ local function fetch_rule(rule_name,rule_type,url,exclude_domain)
 				out:close()
 
 			end
-			os.remove(download_file_tmp..k)				
 		else
 			sret = 0
-			log(rule_name.. " 第" ..k.. "条规则:" ..v.. "下载失败！")
+			log(rule_name.. " 第" ..k.. "条规则:" ..v.. "下载失败，请检查网络或下载链接后重试！")
 		end
+		os.remove(download_file_tmp..k)
+		os.remove(vali_file..k)
 	end
 
 	if sret == 200 then
@@ -188,9 +208,7 @@ local function fetch_rule(rule_name,rule_type,url,exclude_domain)
 		end
 		luci.sys.call("cat " ..unsort_file_tmp.. " | sort -u > "..file_tmp)
 		os.remove(unsort_file_tmp)
-	end
 
-	if sret == 200 then
 		local old_md5 = luci.sys.exec("echo -n $(md5sum " .. rule_path .. "/" ..rule_name.. " | awk '{print $1}')")
 		local new_md5 = luci.sys.exec("echo -n $([ -f '" ..file_tmp.. "' ] && md5sum " ..file_tmp.." | awk '{print $1}')")
 		if old_md5 ~= new_md5 then

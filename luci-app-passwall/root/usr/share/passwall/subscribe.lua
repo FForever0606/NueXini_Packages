@@ -17,7 +17,7 @@ local datatypes = require "luci.cbi.datatypes"
 local tinsert = table.insert
 local ssub, slen, schar, sbyte, sformat, sgsub = string.sub, string.len, string.char, string.byte, string.format, string.gsub
 local jsonParse, jsonStringify = luci.jsonc.parse, luci.jsonc.stringify
-local b64decode = nixio.bin.b64decode
+local base64Decode = api.base64Decode
 local uci = luci.model.uci.cursor()
 uci:revert(appname)
 
@@ -27,7 +27,7 @@ local has_trojan_plus = api.is_finded("trojan-plus")
 local has_v2ray = api.is_finded("v2ray")
 local has_xray = api.is_finded("xray")
 local has_trojan_go = api.is_finded("trojan-go")
-local allowInsecure_default = true
+local allowInsecure_default = nil
 local ss_aead_type_default = uci:get(appname, "@global_subscribe[0]", "ss_aead_type") or "shadowsocks-libev"
 local trojan_type_default = uci:get(appname, "@global_subscribe[0]", "trojan_type") or "trojan-plus"
 -- 判断是否过滤节点关键字
@@ -37,14 +37,14 @@ local filter_keyword_keep_list_default = uci:get(appname, "@global_subscribe[0]"
 local function is_filter_keyword(value)
 	if filter_keyword_mode_default == "1" then
 		for k,v in ipairs(filter_keyword_discard_list_default) do
-			if value:find(v) then
+			if value:find(v, 1, true) then
 				return true
 			end
 		end
 	elseif filter_keyword_mode_default == "2" then
 		local result = true
 		for k,v in ipairs(filter_keyword_keep_list_default) do
-			if value:find(v) then
+			if value:find(v, 1, true) then
 				result = false
 			end
 		end
@@ -52,12 +52,12 @@ local function is_filter_keyword(value)
 	elseif filter_keyword_mode_default == "3" then
 		local result = false
 		for k,v in ipairs(filter_keyword_discard_list_default) do
-			if value:find(v) then
+			if value:find(v, 1, true) then
 				result = true
 			end
 		end
 		for k,v in ipairs(filter_keyword_keep_list_default) do
-			if value:find(v) then
+			if value:find(v, 1, true) then
 				result = false
 			end
 		end
@@ -65,12 +65,12 @@ local function is_filter_keyword(value)
 	elseif filter_keyword_mode_default == "4" then
 		local result = true
 		for k,v in ipairs(filter_keyword_keep_list_default) do
-			if value:find(v) then
+			if value:find(v, 1, true) then
 				result = false
 			end
 		end
 		for k,v in ipairs(filter_keyword_discard_list_default) do
-			if value:find(v) then
+			if value:find(v, 1, true) then
 				result = true
 			end
 		end
@@ -81,10 +81,6 @@ end
 
 local nodeResult = {} -- update result
 local debug = false
-
-local ss_rust_encrypt_method_list = {
-    "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"
-}
 
 local log = function(...)
 	local result = os.date("%Y-%m-%d %H:%M:%S: ") .. table.concat({...}, " ")
@@ -228,7 +224,9 @@ do
 
 			local rules = {}
 			uci:foreach(appname, "shunt_rules", function(e)
-				table.insert(rules, e)
+				if e[".name"] and e.remarks then
+					table.insert(rules, e)
+				end
 			end)
 			table.insert(rules, {
 				[".name"] = "default_node",
@@ -350,22 +348,6 @@ local function trim(text)
 	return (sgsub(text, "^%s*(.-)%s*$", "%1"))
 end
 
--- base64
-local function base64Decode(text)
-	local raw = text
-	if not text then return '' end
-	text = text:gsub("%z", "")
-	text = text:gsub("_", "/")
-	text = text:gsub("-", "+")
-	local mod4 = #text % 4
-	text = text .. string.sub('====', mod4 + 1)
-	local result = b64decode(text)
-	if result then
-		return result:gsub("%z", "")
-	else
-		return raw
-	end
-end
 -- 处理数据
 local function processData(szType, content, add_mode, add_from)
 	--log(content, add_mode, add_from)
@@ -378,12 +360,16 @@ local function processData(szType, content, add_mode, add_from)
 		local dat = split(content, "/%?")
 		local hostInfo = split(dat[1], ':')
 		result.type = "SSR"
-		result.address = hostInfo[1]
-		result.port = hostInfo[2]
-		result.protocol = hostInfo[3]
-		result.method = hostInfo[4]
-		result.obfs = hostInfo[5]
-		result.password = base64Decode(hostInfo[6])
+		result.address = ""
+		for i=1,#hostInfo-5,1 do
+			result.address = result.address .. hostInfo[i] .. ":"
+		end
+		result.address = string.sub(result.address, 0, #result.address-1) 
+		result.port = hostInfo[#hostInfo-4]
+		result.protocol = hostInfo[#hostInfo-3]
+		result.method = hostInfo[#hostInfo-2]
+		result.obfs = hostInfo[#hostInfo-1]
+		result.password = base64Decode(hostInfo[#hostInfo])	
 		local params = {}
 		for _, v in pairs(split(dat[2], '&')) do
 			local t = split(v, '=')
@@ -404,7 +390,6 @@ local function processData(szType, content, add_mode, add_from)
 		result.address = info.add
 		result.port = info.port
 		result.protocol = 'vmess'
-		result.alter_id = info.aid
 		result.uuid = info.id
 		result.remarks = info.ps
 		-- result.mux = 1
@@ -435,6 +420,7 @@ local function processData(szType, content, add_mode, add_from)
 			result.mkcp_downlinkCapacity = 20
 			result.mkcp_readBufferSize = 2
 			result.mkcp_writeBufferSize = 2
+			result.mkcp_seed = info.seed
 		end
 		if info.net == 'quic' then
 			result.quic_guise = info.type
@@ -509,25 +495,49 @@ local function processData(szType, content, add_mode, add_from)
 		result.method = method
 		result.password = password
 
-		local flag = false
-		for k, v in ipairs(ss_rust_encrypt_method_list) do
-			if method:upper() == v:upper() then
-				flag = true
+		local aead = false
+		for k, v in ipairs({"aes-128-gcm", "aes-256-gcm", "chacha20-poly1305", "chacha20-ietf-poly1305"}) do
+			if method:lower() == v:lower() then
+				aead = true
 			end
 		end
-		if flag then
+		if aead then
 			if ss_aead_type_default == "shadowsocks-libev" and has_ss then
 				result.type = "SS"
 			elseif ss_aead_type_default == "shadowsocks-rust" and has_ss_rust then
 				result.type = 'SS-Rust'
+				if method:lower() == "chacha20-poly1305" then
+					result.method = "chacha20-ietf-poly1305"
+				end
 			elseif ss_aead_type_default == "v2ray" and has_v2ray and not result.plugin then
 				result.type = 'V2ray'
 				result.protocol = 'shadowsocks'
 				result.transport = 'tcp'
+				if method:lower() == "chacha20-ietf-poly1305" then
+					result.method = "chacha20-poly1305"
+				end
 			elseif ss_aead_type_default == "xray" and has_xray and not result.plugin then
 				result.type = 'Xray'
 				result.protocol = 'shadowsocks'
 				result.transport = 'tcp'
+				if method:lower() == "chacha20-ietf-poly1305" then
+					result.method = "chacha20-poly1305"
+				end
+			end
+		end
+		local aead2022 = false
+		for k, v in ipairs({"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha8-poly1305", "2022-blake3-chacha20-poly1305"}) do
+			if method:lower() == v:lower() then
+				aead2022 = true
+			end
+		end
+		if aead2022 then
+			if ss_aead_type_default == "xray" and has_xray and not result.plugin then
+				result.type = 'Xray'
+				result.protocol = 'shadowsocks'
+				result.transport = 'tcp'
+			elseif has_ss_rust then
+				result.type = 'SS-Rust'
 			end
 		end
 	elseif szType == "trojan" then
@@ -561,15 +571,11 @@ local function processData(szType, content, add_mode, add_from)
 				result.address = hostInfo and hostInfo[1] or Info[2]
 			end
 			local peer, sni = nil, ""
-			local allowInsecure = allowInsecure_default
 			local query = split(Info[2], "?")
 			local params = {}
 			for _, v in pairs(split(query[2], '&')) do
 				local t = split(v, '=')
 				params[string.lower(t[1])] = UrlDecode(t[2])
-			end
-			if params.allowinsecure then
-				allowInsecure = params.allowinsecure
 			end
 			if params.peer then peer = params.peer end
 			sni = params.sni and params.sni or ""
@@ -592,7 +598,16 @@ local function processData(szType, content, add_mode, add_from)
 			end
 			result.tls = '1'
 			result.tls_serverName = peer and peer or sni
-			result.tls_allowInsecure = allowInsecure and "1" or "0"
+			if params.allowinsecure then
+				if params.allowinsecure == "1" or params.allowinsecure == "0" then
+					result.tls_allowInsecure = params.allowinsecure
+				else
+					result.tls_allowInsecure = string.lower(params.allowinsecure) == "true" and "1" or "0"
+				end
+				log(result.remarks .. ' 使用节点AllowInsecure设定: '.. result.tls_allowInsecure)
+			else
+				result.tls_allowInsecure = allowInsecure_default and "1" or "0"
+			end
 		end
 		if trojan_type_default == "trojan-plus" and has_trojan_plus then
 			result.type = "Trojan-Plus"
@@ -740,6 +755,7 @@ local function processData(szType, content, add_mode, add_from)
 				result.mkcp_downlinkCapacity = 20
 				result.mkcp_readBufferSize = 2
 				result.mkcp_writeBufferSize = 2
+				result.mkcp_seed = params.seed
 			end
 			if params.type == 'quic' then
 				result.quic_guise = params.headerType or "none"
@@ -755,18 +771,51 @@ local function processData(szType, content, add_mode, add_from)
 			result.encryption = params.encryption or "none"
 
 			result.tls = "0"
-			if params.security == "tls" or params.security == "xtls" then
+			if params.security == "tls" then
 				result.tls = "1"
-				if params.security == "xtls" then
-					result.xtls = "1"
-					result.flow = params.flow or "xtls-rprx-direct"
-				end
+				result.tlsflow = params.flow or nil
 				result.tls_serverName = (params.sni and params.sni ~= "") and params.sni or params.host
+				result.fingerprint = (params.fp and params.fp ~= "") and params.fp or "chrome"
 			end
 
 			result.port = port
 			result.tls_allowInsecure = allowInsecure_default and "1" or "0"
 		end
+	elseif szType == 'hysteria' then
+		local alias = ""
+		if content:find("#") then
+			local idx_sp = content:find("#")
+			alias = content:sub(idx_sp + 1, -1)
+			content = content:sub(0, idx_sp - 1)
+		end
+		result.remarks = UrlDecode(alias)
+		result.type = "Hysteria"
+		
+		local dat = split(content, '%?')
+		local hostInfo = split(dat[1], ':')
+		result.address = hostInfo[1]
+		result.port = hostInfo[2]
+		local params = {}
+		for _, v in pairs(split(dat[2], '&')) do
+			local t = split(v, '=')
+			if #t > 0 then
+				params[t[1]] = t[2]
+			end
+		end
+		result.protocol = params.protocol
+		result.hysteria_obfs = params.obfsParam
+		result.hysteria_auth_type = "string"
+		result.hysteria_auth_password = params.auth
+		result.tls_serverName = params.peer
+		if params.insecure and (params.insecure == "1" or params.insecure == "0") then
+			result.tls_allowInsecure = params.insecure
+			log(result.remarks ..' 使用节点AllowInsecure设定: '.. result.tls_allowInsecure)
+		else
+			result.tls_allowInsecure = allowInsecure_default and "1" or "0"
+		end
+		result.hysteria_alpn = params.alpn
+		result.hysteria_up_mbps = params.upmbps
+		result.hysteria_down_mbps = params.downmbps
 	else
 		log('暂时不支持' .. szType .. "类型的节点订阅，跳过此节点。")
 		return nil
@@ -781,30 +830,15 @@ local function processData(szType, content, add_mode, add_from)
 	return result
 end
 
--- curl
 local function curl(url, file, ua)
 	if not ua or ua == "" then
 		ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.122 Safari/537.36"
 	end
-	local stdout = ""
-	local cmd = string.format('curl -skL --user-agent "%s" --retry 3 --connect-timeout 3 "%s"', ua, url)
-	if file then
-		cmd = cmd .. " -o " .. file
-		stdout = luci.sys.call(cmd .. " > /dev/null")
-		return stdout
-	else
-		stdout = luci.sys.exec(cmd)
-		return trim(stdout)
-	end
-
-	if not stdout or #stdout <= 0 then
-		if uci:get(appname, "@global_subscribe[0]", "subscribe_proxy") or "0" == "1" and uci:get(appname, "@global[0]", "enabled") or "0" == "1" then
-			log('通过代理订阅失败，尝试关闭代理订阅。')
-			luci.sys.call("/etc/init.d/" .. appname .. " stop > /dev/null")
-			stdout = luci.sys.exec(string.format('curl -skL --user-agent "%s" -k --retry 3 --connect-timeout 3 "%s"', ua, url))
-		end
-	end
-	return trim(stdout)
+	local args = {
+		"-skL", "--retry 3", "--connect-timeout 3", '--user-agent "' .. ua .. '"'
+	}
+	local result = api.curl_logic(url, file, args)
+    return result
 end
 
 local function truncate_nodes(add_from)
@@ -963,7 +997,7 @@ local function update_node(manual)
 	if manual == 0 and #group > 0 then
 		uci:foreach(appname, "nodes", function(node)
 			-- 如果是未发现新节点或手动导入的节点就不要删除了...
-			if (node.add_from and group:find(node.add_from)) and node.add_mode == "2" then
+			if (node.add_from and group:find(node.add_from, 1, true)) and node.add_mode == "2" then
 				uci:delete(appname, node['.name'])
 			end
 		end)
@@ -1071,7 +1105,7 @@ local function parse_link(raw, add_mode, add_from)
 				if result then
 					if not result.type then
 						log('丢弃节点:' .. result.remarks .. ",找不到可使用二进制.")
-					elseif (add_mode == "2" and is_filter_keyword(result.remarks)) or not result.address or result.remarks == "NULL" or
+					elseif (add_mode == "2" and is_filter_keyword(result.remarks)) or not result.address or result.remarks == "NULL" or result.address=="127.0.0.1" or
 							(not datatypes.hostname(result.address) and not (datatypes.ipmask4(result.address) or datatypes.ipmask6(result.address))) then
 						log('丢弃过滤节点: ' .. result.type .. ' 节点, ' .. result.remarks)
 					else
@@ -1097,7 +1131,7 @@ end
 local execute = function()
 	do
 		local subscribe_list = {}
-		local retry = {}
+		local fail_list = {}
 		if arg[2] then
 			string.gsub(arg[2], '[^' .. "," .. ']+', function(w)
 				subscribe_list[#subscribe_list + 1] = uci:get_all(appname, w) or {}
@@ -1109,10 +1143,11 @@ local execute = function()
 		end
 
 		for index, value in ipairs(subscribe_list) do
+			local cfgid = value[".name"]
 			local remark = value.remark
 			local url = value.url
-			if value.allowInsecure and value.allowInsecure ~= "1" then
-				allowInsecure_default = nil
+			if value.allowInsecure and value.allowInsecure == "1" then
+				allowInsecure_default = true
 			end
 			local filter_keyword_mode = value.filter_keyword_mode or "5"
 			if filter_keyword_mode == "0" then
@@ -1142,18 +1177,18 @@ local execute = function()
 			end
 			local ua = value.user_agent
 			log('正在订阅:【' .. remark .. '】' .. url)
-			local raw = curl(url, "/tmp/" .. remark, ua)
+			local raw = curl(url, "/tmp/" .. cfgid, ua)
 			if raw == 0 then
-				local f = io.open("/tmp/" .. remark, "r")
+				local f = io.open("/tmp/" .. cfgid, "r")
 				local stdout = f:read("*all")
 				f:close()
 				raw = trim(stdout)
-				os.remove("/tmp/" .. remark)
+				os.remove("/tmp/" .. cfgid)
 				parse_link(raw, "2", remark)
 			else
-				retry[#retry + 1] = value
+				fail_list[#fail_list + 1] = value
 			end
-			allowInsecure_default = true
+			allowInsecure_default = nil
 			filter_keyword_mode_default = uci:get(appname, "@global_subscribe[0]", "filter_keyword_mode") or "0"
 			filter_keyword_discard_list_default = uci:get(appname, "@global_subscribe[0]", "filter_discard_list") or {}
 			filter_keyword_keep_list_default = uci:get(appname, "@global_subscribe[0]", "filter_keep_list") or {}
@@ -1161,13 +1196,9 @@ local execute = function()
 			trojan_type_default = uci:get(appname, "@global_subscribe[0]", "trojan_type") or "trojan-plus"
 		end
 
-		if #retry > 0 then
-			for index, value in ipairs(retry) do
-				if (uci:get(appname, "@global_subscribe[0]", "subscribe_proxy") or "0") == "1" and (uci:get(appname, "@global[0]", "enabled") or "0") == "1" then
-					log(value.remark .. '订阅失败，请尝试关闭代理后再订阅。')
-				else
-					log(value.remark .. '订阅失败，可能是订阅地址失效，或是网络问题，请诊断！')
-				end
+		if #fail_list > 0 then
+			for index, value in ipairs(fail_list) do
+				log(value.remark .. '订阅失败，可能是订阅地址失效，或是网络问题，请诊断！')
 			end
 		end
 		update_node(0)

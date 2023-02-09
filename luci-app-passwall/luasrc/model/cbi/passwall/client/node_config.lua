@@ -2,6 +2,10 @@ local api = require "luci.model.cbi.passwall.api.api"
 local appname = api.appname
 local uci = api.uci
 
+if not arg[1] or not uci:get(appname, arg[1]) then
+    luci.http.redirect(api.url("node_list"))
+end
+
 local ss_encrypt_method_list = {
     "rc4-md5", "aes-128-cfb", "aes-192-cfb", "aes-256-cfb", "aes-128-ctr",
     "aes-192-ctr", "aes-256-ctr", "bf-cfb", "salsa20", "chacha20", "chacha20-ietf",
@@ -11,7 +15,8 @@ local ss_encrypt_method_list = {
 
 local ss_rust_encrypt_method_list = {
     "plain", "none",
-    "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"
+    "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
+    "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha8-poly1305", "2022-blake3-chacha20-poly1305"
 }
 
 local ssr_encrypt_method_list = {
@@ -35,6 +40,10 @@ local ssr_obfs_list = {
 
 local v_ss_encrypt_method_list = {
     "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305"
+}
+
+local x_ss_encrypt_method_list = {
+    "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305", "xchacha20-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"
 }
 
 local security_list = {"none", "auto", "aes-128-gcm", "chacha20-poly1305", "zero"}
@@ -111,10 +120,16 @@ protocol:value("http", translate("HTTP"))
 protocol:value("socks", translate("Socks"))
 protocol:value("shadowsocks", translate("Shadowsocks"))
 protocol:value("trojan", translate("Trojan"))
+protocol:value("wireguard", translate("WireGuard"))
 protocol:value("_balancing", translate("Balancing"))
 protocol:value("_shunt", translate("Shunt"))
+protocol:value("_iface", translate("Custom Interface") .. " (Only Support Xray)")
 protocol:depends("type", "V2ray")
 protocol:depends("type", "Xray")
+
+iface = s:option(Value, "iface", translate("Interface"))
+iface.default = "eth1"
+iface:depends("protocol", "_iface")
 
 local nodes_table = {}
 for k, e in ipairs(api.get_valid_nodes()) do
@@ -133,23 +148,25 @@ balancing_node:depends("protocol", "_balancing")
 
 -- 分流
 uci:foreach(appname, "shunt_rules", function(e)
-    o = s:option(ListValue, e[".name"], string.format('* <a href="%s" target="_blank">%s</a>', api.url("shunt_rules", e[".name"]), translate(e.remarks)))
-    o:value("nil", translate("Close"))
-    o:value("_default", translate("Default"))
-    o:value("_direct", translate("Direct Connection"))
-    o:value("_blackhole", translate("Blackhole"))
-    o:depends("protocol", "_shunt")
+    if e[".name"] and e.remarks then
+        o = s:option(ListValue, e[".name"], string.format('* <a href="%s" target="_blank">%s</a>', api.url("shunt_rules", e[".name"]), e.remarks))
+        o:value("nil", translate("Close"))
+        o:value("_default", translate("Default"))
+        o:value("_direct", translate("Direct Connection"))
+        o:value("_blackhole", translate("Blackhole"))
+        o:depends("protocol", "_shunt")
 
-    if #nodes_table > 0 then
-        _proxy_tag = s:option(ListValue, e[".name"] .. "_proxy_tag", string.format('* <a style="color:red">%s</a>', translate(e.remarks) .. " " .. translate("Preproxy")))
-        _proxy_tag:value("nil", translate("Close"))
-        _proxy_tag:value("default", translate("Default"))
-        _proxy_tag:value("main", translate("Default Preproxy"))
-        _proxy_tag.default = "nil"
+        if #nodes_table > 0 then
+            _proxy_tag = s:option(ListValue, e[".name"] .. "_proxy_tag", string.format('* <a style="color:red">%s</a>', e.remarks .. " " .. translate("Preproxy")))
+            _proxy_tag:value("nil", translate("Close"))
+            _proxy_tag:value("default", translate("Default"))
+            _proxy_tag:value("main", translate("Default Preproxy"))
+            _proxy_tag.default = "nil"
 
-        for k, v in pairs(nodes_table) do
-            o:value(v.id, v.remarks)
-            _proxy_tag:depends(e[".name"], v.id)
+            for k, v in pairs(nodes_table) do
+                o:value(v.id, v.remarks)
+                _proxy_tag:depends(e[".name"], v.id)
+            end
         end
     end
 end)
@@ -175,6 +192,9 @@ if #nodes_table > 0 then
         o:depends("default_node", v.id)
     end
 end
+
+dialerProxy = s:option(Flag, "dialerProxy", translate("dialerProxy"))
+dialerProxy:depends({ type = "Xray", protocol = "_shunt"})
 
 domainStrategy = s:option(ListValue, "domainStrategy", translate("Domain Strategy"))
 domainStrategy:value("AsIs")
@@ -246,32 +266,7 @@ address:depends({ type = "Xray", protocol = "http" })
 address:depends({ type = "Xray", protocol = "socks" })
 address:depends({ type = "Xray", protocol = "shadowsocks" })
 address:depends({ type = "Xray", protocol = "trojan" })
-
---[[
-use_ipv6 = s:option(Flag, "use_ipv6", translate("Use IPv6"))
-use_ipv6.default = 0
-use_ipv6:depends("type", "Socks")
-use_ipv6:depends("type", "SS")
-use_ipv6:depends("type", "SS-Rust")
-use_ipv6:depends("type", "SSR")
-use_ipv6:depends("type", "Brook")
-use_ipv6:depends("type", "Trojan")
-use_ipv6:depends("type", "Trojan-Plus")
-use_ipv6:depends("type", "Trojan-Go")
-use_ipv6:depends("type", "Hysteria")
-use_ipv6:depends({ type = "V2ray", protocol = "vmess" })
-use_ipv6:depends({ type = "V2ray", protocol = "vless" })
-use_ipv6:depends({ type = "V2ray", protocol = "http" })
-use_ipv6:depends({ type = "V2ray", protocol = "socks" })
-use_ipv6:depends({ type = "V2ray", protocol = "shadowsocks" })
-use_ipv6:depends({ type = "V2ray", protocol = "trojan" })
-use_ipv6:depends({ type = "Xray", protocol = "vmess" })
-use_ipv6:depends({ type = "Xray", protocol = "vless" })
-use_ipv6:depends({ type = "Xray", protocol = "http" })
-use_ipv6:depends({ type = "Xray", protocol = "socks" })
-use_ipv6:depends({ type = "Xray", protocol = "shadowsocks" })
-use_ipv6:depends({ type = "Xray", protocol = "trojan" })
---]]
+address:depends({ type = "Xray", protocol = "wireguard" })
 
 port = s:option(Value, "port", translate("Port"))
 port.datatype = "port"
@@ -298,6 +293,10 @@ port:depends({ type = "Xray", protocol = "http" })
 port:depends({ type = "Xray", protocol = "socks" })
 port:depends({ type = "Xray", protocol = "shadowsocks" })
 port:depends({ type = "Xray", protocol = "trojan" })
+port:depends({ type = "Xray", protocol = "wireguard" })
+
+hysteria_hop = s:option(Value, "hysteria_hop", translate("Additional ports for hysteria hop"))
+hysteria_hop:depends("type", "Hysteria")
 
 username = s:option(Value, "username", translate("Username"))
 username:depends("type", "Socks")
@@ -327,6 +326,18 @@ password:depends({ type = "Xray", protocol = "socks" })
 password:depends({ type = "Xray", protocol = "shadowsocks" })
 password:depends({ type = "Xray", protocol = "trojan" })
 
+hysteria_protocol = s:option(ListValue, "hysteria_protocol", translate("Protocol"))
+hysteria_protocol:value("udp", "UDP")
+hysteria_protocol:value("faketcp", "faketcp")
+hysteria_protocol:value("wechat-video", "wechat-video")
+hysteria_protocol:depends("type", "Hysteria")
+function hysteria_protocol.cfgvalue(self, section)
+	return m:get(section, "protocol")
+end
+function hysteria_protocol.write(self, section, value)
+	m:set(section, "protocol", value)
+end
+
 hysteria_obfs = s:option(Value, "hysteria_obfs", translate("Obfs Password"))
 hysteria_obfs:depends("type", "Hysteria")
 
@@ -340,6 +351,9 @@ hysteria_auth_password = s:option(Value, "hysteria_auth_password", translate("Au
 hysteria_auth_password.password = true
 hysteria_auth_password:depends("hysteria_auth_type", "string")
 hysteria_auth_password:depends("hysteria_auth_type", "base64")
+
+hysteria_alpn = s:option(Value, "hysteria_alpn", translate("QUIC TLS ALPN"))
+hysteria_alpn:depends("type", "Hysteria")
 
 ss_encrypt_method = s:option(Value, "ss_encrypt_method", translate("Encrypt Method"))
 for a, t in ipairs(ss_encrypt_method_list) do ss_encrypt_method:value(t) end
@@ -384,13 +398,30 @@ encryption:depends({ type = "Xray", protocol = "vless" })
 
 v_ss_encrypt_method = s:option(ListValue, "v_ss_encrypt_method", translate("Encrypt Method"))
 for a, t in ipairs(v_ss_encrypt_method_list) do v_ss_encrypt_method:value(t) end
-v_ss_encrypt_method:depends("protocol", "shadowsocks")
+v_ss_encrypt_method:depends({ type = "V2ray", protocol = "shadowsocks" })
 function v_ss_encrypt_method.cfgvalue(self, section)
 	return m:get(section, "method")
 end
 function v_ss_encrypt_method.write(self, section, value)
 	m:set(section, "method", value)
 end
+
+x_ss_encrypt_method = s:option(ListValue, "x_ss_encrypt_method", translate("Encrypt Method"))
+for a, t in ipairs(x_ss_encrypt_method_list) do x_ss_encrypt_method:value(t) end
+x_ss_encrypt_method:depends({ type = "Xray", protocol = "shadowsocks" })
+function x_ss_encrypt_method.cfgvalue(self, section)
+	return m:get(section, "method")
+end
+function x_ss_encrypt_method.write(self, section, value)
+	m:set(section, "method", value)
+end
+
+iv_check = s:option(Flag, "iv_check", translate("IV Check"))
+iv_check:depends({ type = "V2ray", protocol = "shadowsocks" })
+iv_check:depends({ type = "Xray", protocol = "shadowsocks" })
+
+uot = s:option(Flag, "uot", translate("UDP over TCP"), translate("Need Xray server side with Shadowsocks-2022 protocol"))
+uot:depends({ type = "Xray", protocol = "shadowsocks" })
 
 ssr_protocol = s:option(Value, "ssr_protocol", translate("Protocol"))
 for a, t in ipairs(ssr_protocol_list) do ssr_protocol:value(t) end
@@ -419,7 +450,7 @@ timeout:depends("type", "SS")
 timeout:depends("type", "SS-Rust")
 timeout:depends("type", "SSR")
 
-tcp_fast_open = s:option(ListValue, "tcp_fast_open", translate("TCP Fast Open"), translate("Need node support required"))
+tcp_fast_open = s:option(ListValue, "tcp_fast_open", "TCP " .. translate("Fast Open"), translate("Need node support required"))
 tcp_fast_open:value("false")
 tcp_fast_open:value("true")
 tcp_fast_open:depends("type", "SS")
@@ -428,6 +459,10 @@ tcp_fast_open:depends("type", "SSR")
 tcp_fast_open:depends("type", "Trojan")
 tcp_fast_open:depends("type", "Trojan-Plus")
 tcp_fast_open:depends("type", "Trojan-Go")
+
+fast_open = s:option(Flag, "fast_open", translate("Fast Open"))
+fast_open.default = "0"
+fast_open:depends("type", "Hysteria")
 
 ss_plugin = s:option(ListValue, "ss_plugin", translate("plugin"))
 ss_plugin:value("none", translate("none"))
@@ -454,34 +489,12 @@ function ss_plugin_opts.write(self, section, value)
 	m:set(section, "plugin_opts", value)
 end
 
-use_kcp = s:option(Flag, "use_kcp", translate("Use") .. "Kcptun",
-                   "<span style='color:red'>" .. translate("Please confirm whether the Kcptun is installed. If not, please go to Rule Update download installation.") .. "</span>")
-use_kcp.default = 0
-use_kcp:depends("type", "SS")
-use_kcp:depends("type", "SS-Rust")
-use_kcp:depends("type", "SSR")
-
-kcp_server = s:option(Value, "kcp_server", translate("Kcptun Server"))
-kcp_server.placeholder = translate("Default:Current Server")
-kcp_server:depends("use_kcp", "1")
-
-kcp_port = s:option(Value, "kcp_port", translate("Kcptun Port"))
-kcp_port.datatype = "port"
-kcp_port:depends("use_kcp", "1")
-
-kcp_opts = s:option(TextValue, "kcp_opts", translate("Kcptun Config"), translate("--crypt aes192 --key abc123 --mtu 1350 --sndwnd 128 --rcvwnd 1024 --mode fast"))
-kcp_opts.placeholder = "--crypt aes192 --key abc123 --mtu 1350 --sndwnd 128 --rcvwnd 1024 --mode fast"
-kcp_opts:depends("use_kcp", "1")
-
 uuid = s:option(Value, "uuid", translate("ID"))
 uuid.password = true
 uuid:depends({ type = "V2ray", protocol = "vmess" })
 uuid:depends({ type = "V2ray", protocol = "vless" })
 uuid:depends({ type = "Xray", protocol = "vmess" })
 uuid:depends({ type = "Xray", protocol = "vless" })
-
-alter_id = s:option(Value, "alter_id", translate("Alter ID"))
-alter_id:depends("protocol", "vmess")
 
 tls = s:option(Flag, "tls", translate("TLS"))
 tls.default = 0
@@ -508,20 +521,12 @@ tls:depends("type", "Trojan")
 tls:depends("type", "Trojan-Plus")
 tls:depends("type", "Trojan-Go")
 
-xtls = s:option(Flag, "xtls", translate("XTLS"))
-xtls.default = 0
-xtls:depends({ type = "Xray", protocol = "vless", tls = true })
-xtls:depends({ type = "Xray", protocol = "trojan", tls = true })
-
-flow = s:option(Value, "flow", translate("flow"))
-flow.default = "xtls-rprx-direct"
-flow:value("xtls-rprx-origin")
-flow:value("xtls-rprx-origin-udp443")
-flow:value("xtls-rprx-direct")
-flow:value("xtls-rprx-direct-udp443")
-flow:value("xtls-rprx-splice")
-flow:value("xtls-rprx-splice-udp443")
-flow:depends("xtls", true)
+tlsflow = s:option(Value, "tlsflow", translate("flow"))
+tlsflow.default = ""
+tlsflow:value("", translate("Disable"))
+tlsflow:value("xtls-rprx-vision")
+tlsflow:value("xtls-rprx-vision-udp443")
+tlsflow:depends({ type = "Xray", protocol = "vless", tls = true })
 
 alpn = s:option(ListValue, "alpn", translate("alpn"))
 alpn.default = "default"
@@ -531,6 +536,11 @@ alpn:value("h2")
 alpn:value("http/1.1")
 alpn:depends({ type = "V2ray", tls = true })
 alpn:depends({ type = "Xray", tls = true })
+
+-- minversion = s:option(Value, "minversion", translate("minversion"))
+-- minversion.default = "1.3"
+-- minversion:value("1.3")
+-- minversion:depends("tls", true)
 
 -- [[ TLS部分 ]] --
 tls_sessionTicket = s:option(Flag, "tls_sessionTicket", translate("Session Ticket"))
@@ -562,19 +572,28 @@ tls_allowInsecure.default = "0"
 tls_allowInsecure:depends("tls", true)
 tls_allowInsecure:depends("type", "Hysteria")
 
-xray_fingerprint = s:option(ListValue, "xray_fingerprint", translate("Finger Print"))
-xray_fingerprint:value("disable", translate("Disable"))
+xray_fingerprint = s:option(Value, "xray_fingerprint", translate("Finger Print"))
+xray_fingerprint:value("", translate("Disable"))
 xray_fingerprint:value("chrome")
 xray_fingerprint:value("firefox")
 xray_fingerprint:value("safari")
+xray_fingerprint:value("ios")
+xray_fingerprint:value("android")
+xray_fingerprint:value("edge")
+xray_fingerprint:value("360")
+xray_fingerprint:value("qq")
+xray_fingerprint:value("random")
 xray_fingerprint:value("randomized")
-xray_fingerprint.default = "disable"
-xray_fingerprint:depends({ type = "Xray", tls = true, xtls = false })
+xray_fingerprint.default = ""
+xray_fingerprint:depends({ type = "Xray", tls = true })
 function xray_fingerprint.cfgvalue(self, section)
 	return m:get(section, "fingerprint")
 end
 function xray_fingerprint.write(self, section, value)
 	m:set(section, "fingerprint", value)
+end
+function xray_fingerprint.remove(self, section)
+	m:del(section, "fingerprint")
 end
 
 trojan_transport = s:option(ListValue, "trojan_transport", translate("Transport"))
@@ -632,6 +651,26 @@ ss_transport:value("h2+ws", "HTTP/2 & WebSocket")
 ss_transport:depends({ type = "V2ray", protocol = "shadowsocks" })
 ss_transport:depends({ type = "Xray", protocol = "shadowsocks" })
 ]]--
+
+wireguard_public_key = s:option(Value, "wireguard_public_key", translate("Public Key"))
+wireguard_public_key:depends({ type = "Xray", protocol = "wireguard" })
+
+wireguard_secret_key = s:option(Value, "wireguard_secret_key", translate("Private Key"))
+wireguard_secret_key:depends({ type = "Xray", protocol = "wireguard" })
+
+wireguard_preSharedKey = s:option(Value, "wireguard_preSharedKey", translate("Pre shared key"))
+wireguard_preSharedKey:depends({ type = "Xray", protocol = "wireguard" })
+
+wireguard_local_address = s:option(DynamicList, "wireguard_local_address", translate("Local Address"))
+wireguard_local_address:depends({ type = "Xray", protocol = "wireguard" })
+
+wireguard_mtu = s:option(Value, "wireguard_mtu", translate("MTU"))
+wireguard_mtu.default = "1420"
+wireguard_mtu:depends({ type = "Xray", protocol = "wireguard" })
+
+wireguard_keepAlive = s:option(Value, "wireguard_keepAlive", translate("Keep Alive"))
+wireguard_keepAlive.default = "0"
+wireguard_keepAlive:depends({ type = "Xray", protocol = "wireguard" })
 
 -- [[ TCP部分 ]]--
 
@@ -698,17 +737,14 @@ ws_path:depends("trojan_transport", "ws")
 ws_path:depends({ type = "Brook", brook_protocol = "wsclient" })
 
 ws_enableEarlyData = s:option(Flag, "ws_enableEarlyData", translate("Enable early data"))
-ws_enableEarlyData:depends("transport", "ws")
+ws_enableEarlyData:depends({ type = "V2ray", transport = "ws" })
 
 ws_maxEarlyData = s:option(Value, "ws_maxEarlyData", translate("Early data length"))
 ws_maxEarlyData.default = "1024"
 ws_maxEarlyData:depends("ws_enableEarlyData", true)
-function ws_maxEarlyData.cfgvalue(self, section)
-	return m:get(section, "ws_maxEarlyData")
-end
-function ws_maxEarlyData.write(self, section, value)
-	m:set(section, "ws_maxEarlyData", value)
-end
+
+ws_earlyDataHeaderName = s:option(Value, "ws_earlyDataHeaderName", translate("Early data header name"), translate("Recommended value: Sec-WebSocket-Protocol"))
+ws_earlyDataHeaderName:depends("ws_enableEarlyData", true)
 
 -- [[ HTTP/2部分 ]]--
 h2_host = s:option(Value, "h2_host", translate("HTTP/2 Host"))
@@ -772,6 +808,10 @@ grpc_permit_without_stream = s:option(Flag, "grpc_permit_without_stream", transl
 grpc_permit_without_stream.default = "0"
 grpc_permit_without_stream:depends("grpc_health_check", true)
 
+grpc_initial_windows_size = s:option(Value, "grpc_initial_windows_size", translate("Initial Windows Size"))
+grpc_initial_windows_size.default = "0"
+grpc_initial_windows_size:depends({ type = "Xray", transport = "grpc"})
+
 -- [[ Trojan-Go Shadowsocks2 ]] --
 ss_aead = s:option(Flag, "ss_aead", translate("Shadowsocks secondary encryption"))
 ss_aead:depends("type", "Trojan-Go")
@@ -793,13 +833,13 @@ mux:depends("type", "Trojan-Go")
 -- [[ Mux ]]--
 mux = s:option(Flag, "mux", translate("Mux"))
 mux:depends({ type = "V2ray", protocol = "vmess" })
-mux:depends({ type = "V2ray", protocol = "vless", xtls = false })
+mux:depends({ type = "V2ray", protocol = "vless" })
 mux:depends({ type = "V2ray", protocol = "http" })
 mux:depends({ type = "V2ray", protocol = "socks" })
 mux:depends({ type = "V2ray", protocol = "shadowsocks" })
 mux:depends({ type = "V2ray", protocol = "trojan" })
 mux:depends({ type = "Xray", protocol = "vmess" })
-mux:depends({ type = "Xray", protocol = "vless", xtls = false })
+mux:depends({ type = "Xray", protocol = "vless" })
 mux:depends({ type = "Xray", protocol = "http" })
 mux:depends({ type = "Xray", protocol = "socks" })
 mux:depends({ type = "Xray", protocol = "shadowsocks" })
@@ -821,6 +861,24 @@ hysteria_up_mbps:depends("type", "Hysteria")
 hysteria_down_mbps = s:option(Value, "hysteria_down_mbps", translate("Max download Mbps"))
 hysteria_down_mbps.default = "50"
 hysteria_down_mbps:depends("type", "Hysteria")
+
+hysteria_recv_window_conn = s:option(Value, "hysteria_recv_window_conn", translate("QUIC stream receive window"))
+hysteria_recv_window_conn:depends("type", "Hysteria")
+
+hysteria_recv_window = s:option(Value, "hysteria_recv_window", translate("QUIC connection receive window"))
+hysteria_recv_window:depends("type", "Hysteria")
+
+hysteria_handshake_timeout = s:option(Value, "hysteria_handshake_timeout", translate("Handshake Timeout"))
+hysteria_handshake_timeout:depends("type", "Hysteria")
+
+hysteria_idle_timeout = s:option(Value, "hysteria_idle_timeout", translate("Idle Timeout"))
+hysteria_idle_timeout:depends("type", "Hysteria")
+
+hysteria_hop_interval = s:option(Value, "hysteria_hop_interval", translate("Hop Interval"))
+hysteria_hop_interval:depends("type", "Hysteria")
+
+hysteria_disable_mtu_discovery = s:option(Flag, "hysteria_disable_mtu_discovery", translate("Disable MTU detection"))
+hysteria_disable_mtu_discovery:depends("type", "Hysteria")
 
 protocol.validate = function(self, value)
     if value == "_shunt" or value == "_balancing" then

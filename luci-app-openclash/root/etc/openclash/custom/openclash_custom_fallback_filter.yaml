@@ -36,3 +36,5 @@ fallback-filter:
     - "+.youtube.com"
     - "+.githubusercontent.com"
     - "+.googlevideo.com"
+    - "+.msftconnecttest.com"
+    - "+.msftncsi.com"

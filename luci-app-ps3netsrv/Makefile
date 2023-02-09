@@ -9,6 +9,8 @@ include $(TOPDIR)/rules.mk
 LUCI_TITLE:=Luci for PS3NETSRV
 LUCI_DEPENDS:=+ps3netsrv
 LUCI_PKGARCH:=all
+
+PKG_NAME:=luci-app-ps3netsrv
 PKG_VERSION:=1
 PKG_RELEASE:=2
 

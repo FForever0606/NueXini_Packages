@@ -6,9 +6,14 @@ cd lede
 sed -i '$a src-git NueXini_Packages https://github.com/NueXini/NueXini_Packages.git' feeds.conf.default
 ./scripts/feeds update -a && ./scripts/feeds install -a
 ```
+## 2.主题
+[lean lede](https://github.com/coolsnowwolf/lede/tree/master)，**请选择1806的主题**
 
-## 2.插件说明
+[OpenWrt Snapshots](https://github.com/openwrt/openwrt/tree/master)，**请选择1907及以上版本的主题**
 
+**文件名不带版本则默认为1806**
+
+## 3.插件说明
 ```
 以下是全部：           注：应用后面标记 “ * ” 为最近新添加；标记“ ! ”与其他插件依赖或冲突。
 -------------------------------------------------------------------------------------------------------------------

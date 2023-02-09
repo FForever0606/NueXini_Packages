@@ -20,7 +20,7 @@ PKG_CONFIG_DEPENDS:= \
 	CONFIG_NPC_COMPRESS_UPX \
 	CONFIG_NPS_COMPRESS_UPX
 
-PKG_BUILD_DEPENDS:=golang/host
+PKG_BUILD_DEPENDS:=golang/host upx/host
 PKG_BUILD_PARALLEL:=1
 PKG_USE_MIPS16:=0
 
@@ -53,13 +53,15 @@ Package/nps/description = $(Package/nps/description/template)
 define Package/npc/config
 	config NPC_COMPRESS_UPX
 		bool "Compress executable files with UPX"
-		default y
+		depends on !mips64
+		default n
 endef
 
 define Package/nps/config
 	config NPS_COMPRESS_UPX
 		bool "Compress executable files with UPX"
-		default y
+		depends on !mips64
+		default n
 endef
 
 define Build/Compile

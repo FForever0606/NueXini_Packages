@@ -6,8 +6,8 @@ local fs = require "luci.openclash"
 local sys = require "luci.sys"
 local sid = arg[1]
 
-font_red = [[<font color="red">]]
-font_off = [[</font>]]
+font_red = [[<b style=color:red>]]
+font_off = [[</b>]]
 bold_on  = [[<strong>]]
 bold_off = [[</strong>]]
 
@@ -78,6 +78,14 @@ for t,f in ipairs(fs.glob("/etc/openclash/rule_provider/*"))do
     o:value("./rule_provider/"..p[t].name)
   end
 end
+for t,f in ipairs(fs.glob("/etc/openclash/game_rules/*"))do
+	h=fs.stat(f)
+	if h then
+    p[t]={}
+    p[t].name=fs.basename(f)
+    o:value("./game_rules/"..p[t].name)
+  end
+end
 o.rmempty = false
 o:depends("type", "file")
 
@@ -90,15 +98,34 @@ o.default = "86400"
 o.rmempty = false
 o:depends("type", "http")
 
+o = s:option(ListValue, "position", translate("Append Position"))
+o.rmempty     = false
+o:value("0", translate("Priority Match"))
+o:value("1", translate("Extended Match"))
+
 o = s:option(ListValue, "group", translate("Set Proxy Group"))
 o.description = font_red..bold_on..translate("The Added Proxy Groups Must Exist Except 'DIRECT' & 'REJECT'")..bold_off..font_off
 o.rmempty = true
+local groupnames,filename
+filename = m.uci:get(openclash, "config", "config_path")
+if filename then
+   groupnames = sys.exec(string.format('ruby -ryaml -rYAML -I "/usr/share/openclash" -E UTF-8 -e "YAML.load_file(\'%s\')[\'proxy-groups\'].each do |i| puts i[\'name\']+\'##\' end" 2>/dev/null',filename))
+   if groupnames then
+      for groupname in string.gmatch(groupnames, "([^'##\n']+)##") do
+         if groupname ~= nil and groupname ~= "" then
+            o:value(groupname)
+         end
+      end
+   end
+end
+
 m.uci:foreach("openclash", "groups",
-		function(s)
-			if s.name ~= "" and s.name ~= nil then
-			   o:value(s.name)
-			end
-		end)
+   function(s)
+      if s.name ~= "" and s.name ~= nil then
+         o:value(s.name)
+      end
+   end)
+
 o:value("DIRECT")
 o:value("REJECT")
 
@@ -124,4 +151,5 @@ o.write = function()
    luci.http.redirect(m.redirect)
 end
 
+m:append(Template("openclash/toolbar_show"))
 return m

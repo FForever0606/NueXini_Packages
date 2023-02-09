@@ -8,11 +8,63 @@ jsonc = require "luci.jsonc"
 i18n = require "luci.i18n"
 
 appname = "passwall"
-curl = "/usr/bin/curl"
-curl_args = {"-skfL", "--connect-timeout 3", "--retry 3", "-m 60"}
+curl_args = { "-skfL", "--connect-timeout 3", "--retry 3", "-m 60" }
 command_timeout = 300
 LEDE_BOARD = nil
 DISTRIB_TARGET = nil
+
+LOG_FILE = "/tmp/log/" .. appname .. ".log"
+CACHE_PATH = "/tmp/etc/" .. appname .. "_tmp"
+
+function base64Decode(text)
+	local raw = text
+	if not text then return '' end
+	text = text:gsub("%z", "")
+	text = text:gsub("%c", "")
+	text = text:gsub("_", "/")
+	text = text:gsub("-", "+")
+	local mod4 = #text % 4
+	text = text .. string.sub('====', mod4 + 1)
+	local result = nixio.bin.b64decode(text)
+	if result then
+		return result:gsub("%z", "")
+	else
+		return raw
+	end
+end
+
+function curl_base(url, file, args)
+    if not args then args = {} end
+    if file then
+        args[#args + 1] = "-o " .. file
+    end
+	local cmd = string.format('curl %s "%s"', table_join(args), url)
+    if file then
+        return luci.sys.call(cmd .. " > /dev/null")
+    else
+        return trim(luci.sys.exec(cmd))
+    end
+end
+
+function curl_proxy(url, file, args)
+    --使用代理
+    local socks_server = luci.sys.exec("[ -f /tmp/etc/passwall/TCP_SOCKS_server ] && echo -n $(cat /tmp/etc/passwall/TCP_SOCKS_server) || echo -n ''")
+    if socks_server ~= "" then
+        if not args then args = {} end
+        local tmp_args = clone(args)
+        tmp_args[#tmp_args + 1] = "-x socks5h://" .. socks_server
+        return curl_base(url, file, tmp_args)
+    end
+    return nil
+end
+
+function curl_logic(url, file, args)
+    local result = curl_proxy(url, file, args)
+    if not result then
+        result = curl_base(url, file, args)
+    end
+    return result
+end
 
 function url(...)
     local url = string.format("admin/services/%s", appname)
@@ -51,6 +103,21 @@ function repeat_exist(table, value)
     return false
 end
 
+function remove(...)
+    for index, value in ipairs({...}) do
+        if value and #value > 0 and value ~= "/" then
+            sys.call(string.format("rm -rf %s", value))
+        end
+    end
+end
+
+function is_install(package)
+    if package and #package > 0 then
+        return sys.call(string.format('opkg list-installed | grep "%s" > /dev/null 2>&1', package)) == 0
+    end
+    return false
+end
+
 function get_args(arg)
     local var = {}
     for i, arg_k in pairs(arg) do
@@ -75,7 +142,7 @@ function strToTable(str)
 end
 
 function is_normal_node(e)
-    if e and e.type and e.protocol and (e.protocol == "_balancing" or e.protocol == "_shunt") then
+    if e and e.type and e.protocol and (e.protocol == "_balancing" or e.protocol == "_shunt" or e.protocol == "_iface") then
         return false
     end
     return true
@@ -86,6 +153,9 @@ function is_special_node(e)
 end
 
 function is_ip(val)
+    if is_ipv6(val) then
+        val = get_ipv6_only(val)
+    end
     return datatypes.ipaddr(val)
 end
 
@@ -109,6 +179,28 @@ function is_ipv6addrport(val)
         end
     end
     return false
+end
+
+function get_ipv6_only(val)
+    local result = ""
+    if is_ipv6(val) then
+        result = val
+        if val:match('%[(.*)%]') then
+            result = val:match('%[(.*)%]')
+        end
+    end
+    return result
+end
+
+function get_ipv6_full(val)
+    local result = ""
+    if is_ipv6(val) then
+        result = val
+        if not val:match('%[(.*)%]') then
+            result = "[" .. result .. "]"
+        end
+    end
+    return result
 end
 
 function get_ip_type(val)
@@ -146,23 +238,30 @@ function iprange(val)
     return false
 end
 
+function get_domain_from_url(url)
+    local domain = string.match(url, "//([^/]+)")
+    if domain then
+        return domain
+    end
+    return url
+end
+
 function get_valid_nodes()
     local nodes_ping = uci_get_type("global_other", "nodes_ping") or ""
     local nodes = {}
     uci:foreach(appname, "nodes", function(e)
         e.id = e[".name"]
         if e.type and e.remarks then
-            if e.protocol and (e.protocol == "_balancing" or e.protocol == "_shunt") then
+            if e.protocol and (e.protocol == "_balancing" or e.protocol == "_shunt" or e.protocol == "_iface") then
                 e["remark"] = "%s：[%s] " % {i18n.translatef(e.type .. e.protocol), e.remarks}
                 e["node_type"] = "special"
                 nodes[#nodes + 1] = e
             end
             if e.port and e.address then
                 local address = e.address
-                if datatypes.ipaddr(address) or datatypes.hostname(address) then
-                    local type2 = e.type
-                    local address2 = address
-                    if (type2 == "V2ray" or type2 == "Xray") and e.protocol then
+                if is_ip(address) or datatypes.hostname(address) then
+                    local type = e.type
+                    if (type == "V2ray" or type == "Xray") and e.protocol then
                         local protocol = e.protocol
                         if protocol == "vmess" then
                             protocol = "VMess"
@@ -171,18 +270,12 @@ function get_valid_nodes()
                         else
                             protocol = protocol:gsub("^%l",string.upper)
                         end
-                        type2 = type2 .. " " .. protocol
+                        type = type .. " " .. protocol
                     end
-                    if datatypes.ip6addr(address) then address2 = "[" .. address .. "]" end
-                    e["remark"] = "%s：[%s]" % {type2, e.remarks}
+                    if is_ipv6(address) then address = get_ipv6_full(address) end
+                    e["remark"] = "%s：[%s]" % {type, e.remarks}
                     if nodes_ping:find("info") then
-                        e["remark"] = "%s：[%s] %s:%s" % {type2, e.remarks, address2, e.port}
-                    end
-                    if e.use_kcp and e.use_kcp == "1" then
-                        e["remark"] = "%s+%s：[%s]" % {type2, "Kcptun", e.remarks}
-                        if nodes_ping:find("info") then
-                            e["remark"] = "%s+%s：[%s] %s" % {type2, "Kcptun", e.remarks, address2}
-                        end
+                        e["remark"] = "%s：[%s] %s:%s" % {type, e.remarks, address, e.port}
                     end
                     e.node_type = "normal"
                     nodes[#nodes + 1] = e
@@ -196,7 +289,7 @@ end
 function get_full_node_remarks(n)
     local remarks = ""
     if n then
-        if n.protocol and (n.protocol == "_balancing" or n.protocol == "_shunt") then
+        if n.protocol and (n.protocol == "_balancing" or n.protocol == "_shunt" or n.protocol == "_iface") then
             remarks = "%s：[%s] " % {i18n.translatef(n.type .. n.protocol), n.remarks}
         else
             local type2 = n.type
@@ -211,11 +304,7 @@ function get_full_node_remarks(n)
                 end
                 type2 = type2 .. " " .. protocol
             end
-            if n.use_kcp and n.use_kcp == "1" then
-                remarks = "%s+%s：[%s] %s" % {type2, "Kcptun", n.remarks, n.address}
-            else
-                remarks = "%s：[%s] %s:%s" % {type2, n.remarks, n.address, n.port}
-            end
+            remarks = "%s：[%s] %s:%s" % {type2, n.remarks, n.address, n.port}
         end
     end
     return remarks
@@ -261,7 +350,6 @@ function is_finded(e)
     return luci.sys.exec('type -t -p "/bin/%s" -p "%s" "%s"' % {e, get_customed_path(e), e}) ~= "" and true or false
 end
 
-
 function clone(org)
     local function copy(org, res)
         for k,v in pairs(org) do
@@ -279,30 +367,33 @@ function clone(org)
     return res
 end
 
+function get_bin_version_cache(file, cmd)
+    sys.call("mkdir -p /tmp/etc/passwall_tmp")
+    if fs.access(file) then
+        chmod_755(file)
+        local md5 = sys.exec("echo -n $(md5sum " .. file .. " | awk '{print $1}')")
+        if fs.access("/tmp/etc/passwall_tmp/" .. md5) then
+            return sys.exec("echo -n $(cat /tmp/etc/passwall_tmp/%s)" % md5)
+        else
+            local version = sys.exec(string.format("echo -n $(%s %s)", file, cmd))
+            if version and version ~= "" then
+                sys.call("echo '" .. version .. "' > " .. "/tmp/etc/passwall_tmp/" .. md5)
+                return version
+            end
+        end
+    end
+    return ""
+end
+
 function get_v2ray_path()
     local path = uci_get_type("global_app", "v2ray_file")
     return path
 end
 
 function get_v2ray_version(file)
-    sys.call("mkdir -p /tmp/etc/passwall_tmp")
     if file == nil then file = get_v2ray_path() end
-    chmod_755(file)
-    if fs.access(file) then
-        if file == get_v2ray_path() then
-            local md5 = sys.exec("echo -n $(md5sum " .. file .. " | awk '{print $1}')")
-            if fs.access("/tmp/etc/passwall_tmp/" .. md5) then
-                return sys.exec("echo -n $(cat /tmp/etc/passwall_tmp/%s)" % md5)
-            else
-                local version = sys.exec("echo -n $(%s -version | awk '{print $2}' | sed -n 1P)" % file)
-                sys.call("echo '" .. version .. "' > " .. "/tmp/etc/passwall_tmp/" .. md5)
-                return version
-            end
-        else
-            return sys.exec("echo -n $(%s -version | awk '{print $2}' | sed -n 1P)" % file)
-        end
-    end
-    return ""
+    local cmd = "version | awk '{print $2}' | sed -n 1P"
+    return get_bin_version_cache(file, cmd)
 end
 
 function get_xray_path()
@@ -311,24 +402,9 @@ function get_xray_path()
 end
 
 function get_xray_version(file)
-    sys.call("mkdir -p /tmp/etc/passwall_tmp")
     if file == nil then file = get_xray_path() end
-    chmod_755(file)
-    if fs.access(file) then
-        if file == get_xray_path() then
-            local md5 = sys.exec("echo -n $(md5sum " .. file .. " | awk '{print $1}')")
-            if fs.access("/tmp/etc/passwall_tmp/" .. md5) then
-                return sys.exec("echo -n $(cat /tmp/etc/passwall_tmp/%s)" % md5)
-            else
-                local version = sys.exec("echo -n $(%s -version | awk '{print $2}' | sed -n 1P)" % file)
-                sys.call("echo '" .. version .. "' > " .. "/tmp/etc/passwall_tmp/" .. md5)
-                return version
-            end
-        else
-            return sys.exec("echo -n $(%s -version | awk '{print $2}' | sed -n 1P)" % file)
-        end
-    end
-    return ""
+    local cmd = "-version | awk '{print $2}' | sed -n 1P"
+    return get_bin_version_cache(file, cmd)
 end
 
 function get_trojan_go_path()
@@ -337,50 +413,9 @@ function get_trojan_go_path()
 end
 
 function get_trojan_go_version(file)
-    sys.call("mkdir -p /tmp/etc/passwall_tmp")
     if file == nil then file = get_trojan_go_path() end
-    chmod_755(file)
-    if fs.access(file) then
-        if file == get_trojan_go_path() then
-            local md5 = sys.exec("echo -n $(md5sum " .. file .. " | awk '{print $1}')")
-            if fs.access("/tmp/etc/passwall_tmp/" .. md5) then
-                return sys.exec("echo -n $(cat /tmp/etc/passwall_tmp/%s)" % md5)
-            else
-                local version = sys.exec("echo -n $(%s -version | awk '{print $2}' | sed -n 1P)" % file)
-                sys.call("echo '" .. version .. "' > " .. "/tmp/etc/passwall_tmp/" .. md5)
-                return version
-            end
-        else
-            return sys.exec("echo -n $(%s -version | awk '{print $2}' | sed -n 1P)" % file)
-        end
-    end
-    return ""
-end
-
-function get_kcptun_path()
-    local path = uci_get_type("global_app", "kcptun_client_file")
-    return path
-end
-
-function get_kcptun_version(file)
-    sys.call("mkdir -p /tmp/etc/passwall_tmp")
-    if file == nil then file = get_kcptun_path() end
-    chmod_755(file)
-    if fs.access(file) then
-        if file == get_kcptun_path() then
-            local md5 = sys.exec("echo -n $(md5sum " .. file .. " | awk '{print $1}')")
-            if fs.access("/tmp/etc/passwall_tmp/" .. md5) then
-                return sys.exec("echo -n $(cat /tmp/etc/passwall_tmp/%s)" % md5)
-            else
-                local version = sys.exec("echo -n $(%s -v | awk '{print $3}')" % file)
-                sys.call("echo '" .. version .. "' > " .. "/tmp/etc/passwall_tmp/" .. md5)
-                return version
-            end
-        else
-            return sys.exec("echo -n $(%s -v | awk '{print $3}')" % file)
-        end
-    end
-    return ""
+    local cmd = "-version | awk '{print $2}' | sed -n 1P"
+    return get_bin_version_cache(file, cmd)
 end
 
 function get_brook_path()
@@ -389,24 +424,9 @@ function get_brook_path()
 end
 
 function get_brook_version(file)
-    sys.call("mkdir -p /tmp/etc/passwall_tmp")
     if file == nil then file = get_brook_path() end
-    chmod_755(file)
-    if fs.access(file) then
-        if file == get_brook_path() then
-            local md5 = sys.exec("echo -n $(md5sum " .. file .. " | awk '{print $1}')")
-            if fs.access("/tmp/etc/passwall_tmp/" .. md5) then
-                return sys.exec("echo -n $(cat /tmp/etc/passwall_tmp/%s)" % md5)
-            else
-                local version = sys.exec("echo -n $(%s -v | awk '{print $3}')" % file)
-                sys.call("echo '" .. version .. "' > " .. "/tmp/etc/passwall_tmp/" .. md5)
-                return version
-            end
-        else
-            return sys.exec("echo -n $(%s -v | awk '{print $3}')" % file)
-        end
-    end
-    return ""
+    local cmd = "-v | awk '{print $3}'"
+    return get_bin_version_cache(file, cmd)
 end
 
 function get_hysteria_path()
@@ -415,29 +435,40 @@ function get_hysteria_path()
 end
 
 function get_hysteria_version(file)
-    sys.call("mkdir -p /tmp/etc/passwall_tmp")
     if file == nil then file = get_hysteria_path() end
-    chmod_755(file)
-    if fs.access(file) then
-        if file == get_hysteria_path() then
-            local md5 = sys.exec("echo -n $(md5sum " .. file .. " | awk '{print $1}')")
-            if fs.access("/tmp/etc/passwall_tmp/" .. md5) then
-                return sys.exec("echo -n $(cat /tmp/etc/passwall_tmp/%s)" % md5)
-            else
-                local version = sys.exec("echo -n $(%s -v | awk '{print $3}')" % file)
-                sys.call("echo '" .. version .. "' > " .. "/tmp/etc/passwall_tmp/" .. md5)
-                return version
-            end
-        else
-            return sys.exec("echo -n $(%s -v | awk '{print $3}')" % file)
+    local cmd = "-v | awk '{print $3}'"
+    return get_bin_version_cache(file, cmd)
+end
+
+function is_file(path)
+    if path and #path > 1 then
+        if sys.exec('[ -f "%s" ] && echo -n 1' % path) == "1" then
+            return true
         end
     end
-    return ""
+    return nil
+end
+
+function is_dir(path)
+    if path and #path > 1 then
+        if sys.exec('[ -d "%s" ] && echo -n 1' % path) == "1" then
+            return true
+        end
+    end
+    return nil
+end
+
+function get_final_dir(path)
+    if is_dir(path) then
+        return path
+    else
+        return get_final_dir(fs.dirname(path))
+    end
 end
 
 function get_free_space(dir)
     if dir == nil then dir = "/" end
-    if sys.call("df -k " .. dir .. " >/dev/null") == 0 then
+    if sys.call("df -k " .. dir .. " >/dev/null 2>&1") == 0 then
         return tonumber(sys.exec("echo -n $(df -k " .. dir .. " | awk 'NR>1' | awk '{print $4}')"))
     end
     return 0
@@ -454,6 +485,17 @@ end
 function _unpack(t, i)
     i = i or 1
     if t[i] ~= nil then return t[i], _unpack(t, i + 1) end
+end
+
+function table_join(t, s)
+    if not s then
+        s = " "
+    end
+    local str = ""
+    for index, value in ipairs(t) do
+        str = str .. t[index] .. (index == #t and "" or s)
+    end
+    return str
 end
 
 function exec(cmd, args, writer, timeout)
@@ -586,7 +628,60 @@ end
 
 function get_api_json(url)
     local jsonc = require "luci.jsonc"
-    local json_content = luci.sys.exec(curl .. " " .. _unpack(curl_args) .. " " .. url)
+    local json_content = curl_logic(url, nil, curl_args)
     if json_content == "" then return {} end
     return jsonc.parse(json_content) or {}
+end
+
+function common_to_check(api_url, local_version, match_file_name)
+    local json = get_api_json(api_url)
+
+    if #json > 0 then
+        json = json[1]
+    end
+
+    if json.tag_name == nil then
+        return {
+            code = 1,
+            error = i18n.translate("Get remote version info failed.")
+        }
+    end
+
+    local remote_version = json.tag_name
+    local has_update = compare_versions(local_version:match("[^v]+"), "<", remote_version:match("[^v]+"))
+
+    if not has_update then
+        return {
+            code = 0,
+            local_version = local_version,
+            remote_version = remote_version
+        }
+    end
+
+    local asset = {}
+    for _, v in ipairs(json.assets) do
+        if v.name and v.name:match(match_file_name) then
+            asset = v
+            break
+        end
+    end
+    if not asset.browser_download_url then
+        return {
+            code = 1,
+            local_version = local_version,
+            remote_version = remote_version,
+            html_url = json.html_url,
+            data = asset,
+            error = i18n.translate("New version found, but failed to get new version download url.")
+        }
+    end
+
+    return {
+        code = 0,
+        has_update = true,
+        local_version = local_version,
+        remote_version = remote_version,
+        html_url = json.html_url,
+        data = asset
+    }
 end

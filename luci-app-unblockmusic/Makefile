@@ -8,10 +8,10 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-unblockmusic
 PKG_VERSION:=2.3.5
-PKG_RELEASE:=18
+PKG_RELEASE:=21
 
 PKG_LICENSE:=Apache-2.0
-PKG_MAINTAINER:=lean
+PKG_MAINTAINER:=lean <coolsnowwolf@gmail.com>
 
 PKG_CONFIG_DEPENDS:= \
 	CONFIG_PACKAGE_$(PKG_NAME)_INCLUDE_UnblockNeteaseMusic_Go \
@@ -31,7 +31,7 @@ config PACKAGE_$(PKG_NAME)_INCLUDE_UnblockNeteaseMusic_Go
 config PACKAGE_$(PKG_NAME)_INCLUDE_UnblockNeteaseMusic_NodeJS
 	bool "UnblockNeteaseMusic NodeJS Version"
 	depends on HAS_FPU || KERNEL_MIPS_FPU_EMULATOR || SOFT_FLOAT
-	default y if i386||x86_64||arm||aarch64
+	default n
 endef
 
 define Package/$(PKG_NAME)/conffiles

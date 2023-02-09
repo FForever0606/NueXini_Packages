@@ -6,8 +6,8 @@ local sys = require "luci.sys"
 local sid = arg[1]
 local fs = require "luci.openclash"
 
-font_red = [[<font color="red">]]
-font_off = [[</font>]]
+font_red = [[<b style=color:red>]]
+font_off = [[</b>]]
 bold_on  = [[<strong>]]
 bold_off = [[</strong>]]
 
@@ -48,6 +48,11 @@ for t,f in ipairs(fs.glob("/etc/openclash/config/*"))do
     end
   end
 end
+
+o = s:option(Flag, "manual", translate("Custom Tag"))
+o.rmempty = false
+o.default = "0"
+o.description = translate("Mark as Custom Node to Prevent Retention config from being Deleted When Enabled")
 
 o = s:option(ListValue, "type", translate("Provider Type"))
 o.rmempty = true
@@ -91,9 +96,10 @@ o:depends("type", "http")
 o = s:option(ListValue, "health_check", translate("Provider Health Check"))
 o:value("false", translate("Disable"))
 o:value("true", translate("Enable"))
-o.default=true
+o.default = true
 
 o = s:option(Value, "health_check_url", translate("Health Check URL"))
+o:value("http://cp.cloudflare.com/generate_204")
 o:value("http://www.gstatic.com/generate_204")
 o:value("https://cp.cloudflare.com/generate_204")
 o.rmempty = false
@@ -134,4 +140,5 @@ o.write = function()
    luci.http.redirect(m.redirect)
 end
 
+m:append(Template("openclash/toolbar_show"))
 return m

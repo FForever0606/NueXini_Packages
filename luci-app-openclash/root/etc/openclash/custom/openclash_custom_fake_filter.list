@@ -12,6 +12,7 @@ time.*.com
 time.*.gov
 time.*.edu.cn
 time.*.apple.com
+time-ios.apple.com
 time1.*.com
 time2.*.com
 time3.*.com
@@ -62,19 +63,22 @@ amobile.music.tc.qq.com
 *.music.migu.cn
 music.migu.cn
 #win10本地连接检测
-*.msftconnecttest.com
-*.msftncsi.com
-msftconnecttest.com
-msftncsi.com
-#QQ快捷登录
++.msftconnecttest.com
++.msftncsi.com
+#QQ登录
 localhost.ptlogin2.qq.com
 localhost.sec.qq.com
++.qq.com
++.tencent.com
 #Game
 #Nintendo Switch
 +.srv.nintendo.net
+*.n.n.srv.nintendo.net
 #Sony PlayStation
 +.stun.playstation.net
 #Microsoft Xbox
+xbox.*.*.microsoft.com
+*.*.xboxlive.com
 xbox.*.microsoft.com
 xnotify.xboxlive.com
 #Wotgame
@@ -91,6 +95,7 @@ stun.*.*.*
 +.stun.*.*
 +.stun.*.*.*
 +.stun.*.*.*.*
++.stun.*.*.*.*.*
 #Linksys Router
 heartbeat.belkin.com
 *.linksys.com
@@ -109,11 +114,25 @@ lens.l.google.com
 stun.l.google.com
 #Netflix
 +.nflxvideo.net
-#FinalFantasy XIV
+#FinalFantasy XIV Worldwide Server & CN Server
 *.square-enix.com
 *.finalfantasyxiv.com
 *.ffxiv.com
+*.ff14.sdo.com
+ff.dorado.sdo.com
 #Bilibili
 *.mcdn.bilivideo.cn
 #Disney Plus
 +.media.dssott.com
+#shark007 Codecs 
+shark007.net
+#Mijia
+Mijia Cloud
+#招商银行
++.cmbchina.com
++.cmbimg.com
+#AdGuard
+local.adguard.org
+#迅雷
++.sandai.net
++.n0808.com

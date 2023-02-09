@@ -12,41 +12,41 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=uugamebooster
-PKG_VERSION:=v2.18.2
+PKG_VERSION:=v3.6.2
 PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
 
-define Package/$(PKG_NAME)
-	SECTION:=net
-	CATEGORY:=Network
-	DEPENDS:=@(aarch64||arm||mipsel||x86_64) +kmod-tun
-	TITLE:=NetEase UU Game Booster
-	URL:=https://uu.163.com
+define Package/uugamebooster
+  SECTION:=net
+  CATEGORY:=Network
+  DEPENDS:=@(aarch64||arm||mipsel||x86_64) +kmod-tun
+  TITLE:=NetEase UU Game Booster
+  URL:=https://uu.163.com
 endef
 
-define Package/$(PKG_NAME)/description
-NetEase's UU Game Booster Accelerates Triple-A Gameplay and Market
+define Package/uugamebooster/description
+  NetEase's UU Game Booster Accelerates Triple-A Gameplay and Market
 endef
 
 ifeq ($(ARCH),arm)
 	UU_ARCH:=arm
-	PKG_MD5SUM:=c5b71d076a0901ab9a81496c916480f2
+	PKG_MD5SUM:=ee720928879208091c509c685f21db05
 endif
 
 ifeq ($(ARCH),aarch64)
 	UU_ARCH:=aarch64
-	PKG_MD5SUM:=36a66e4e33d7d1fa729c731e31d8219a
+	PKG_MD5SUM:=279ec2a24f2765669aee8f57cb47e30d
 endif
 
 ifeq ($(ARCH),mipsel)
 	UU_ARCH:=mipsel
-	PKG_MD5SUM:=06abb6adbabd87a264fae6ce9ec1875c
+	PKG_MD5SUM:=d2176e47a783e0be9bbecbceb606470b
 endif
 
 ifeq ($(ARCH),x86_64)
 	UU_ARCH:=x86_64
-	PKG_MD5SUM:=a0cbc202f512034b3162244398a2ddc7
+	PKG_MD5SUM:=3656d9cedbe369be7adc059248a9d4bd
 endif
 
 PKG_SOURCE_URL:=https://uu.gdl.netease.com/uuplugin/openwrt-$(UU_ARCH)/$(PKG_VERSION)/uu.tar.gz?
@@ -64,22 +64,22 @@ endef
 define Build/Compile
 endef
 
-define Package/$(PKG_NAME)/conffiles
+define Package/uugamebooster/conffiles
 /root/.uuplugin_uuid
 endef
 
-define Package/$(PKG_NAME)/install
+define Package/uugamebooster/install
 	# $(INSTALL_DIR) $(1)/etc/init.d
 	# $(INSTALL_BIN) ./files/uugamebooster.init $(1)/etc/init.d/uuplugin
 
-	$(INSTALL_DIR) $(1)/usr/share/$(PKG_NAME)
-	$(INSTALL_BIN) $(UNTAR_DIR)/uuplugin $(1)/usr/share/$(PKG_NAME)/uuplugin
-	$(INSTALL_CONF) $(UNTAR_DIR)/uu.conf $(1)/usr/share/$(PKG_NAME)/uu.conf
+	$(INSTALL_DIR) $(1)/usr/share/uugamebooster
+	$(INSTALL_BIN) $(UNTAR_DIR)/uuplugin $(1)/usr/share/uugamebooster/uuplugin
+	$(INSTALL_CONF) $(UNTAR_DIR)/uu.conf $(1)/usr/share/uugamebooster/uu.conf
 
 	# not finish yet:
 	# $(INSTALL_DIR) $(1)/usr/bin
-	# $(INSTALL_BIN) ./files/uugamebooster-update $(1)/usr/bin/$(PKG_NAME)
-	# $(LN) $(1)/usr/bin/$(PKG_NAME)/uugamebooster-update $(1)/usr/bin/uugamebooster-update
+	# $(INSTALL_BIN) ./files/uugamebooster-update $(1)/usr/bin/uugamebooster
+	# $(LN) $(1)/usr/bin/uugamebooster/uugamebooster-update $(1)/usr/bin/uugamebooster-update
 endef
 
-$(eval $(call BuildPackage,$(PKG_NAME)))
+$(eval $(call BuildPackage,uugamebooster))

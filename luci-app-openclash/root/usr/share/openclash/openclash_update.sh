@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 . /usr/share/openclash/log.sh
 
 set_lock() {
@@ -13,34 +13,53 @@ del_lock() {
 
 #一键更新
 if [ "$1" = "one_key_update" ]; then
-   uci set openclash.config.enable=1
-   uci commit openclash
+   uci -q set openclash.config.enable=1
+   uci -q commit openclash
    /usr/share/openclash/openclash_core.sh "$1" >/dev/null 2>&1 &
    /usr/share/openclash/openclash_core.sh "TUN" "$1" >/dev/null 2>&1 &
+   /usr/share/openclash/openclash_core.sh "Meta" "$1" >/dev/null 2>&1 &
    wait
 fi
 
 LAST_OPVER="/tmp/openclash_last_version"
 LAST_VER=$(sed -n 1p "$LAST_OPVER" 2>/dev/null |sed "s/^v//g" |tr -d "\n")
-OP_CV=$(sed -n 1p /usr/share/openclash/res/openclash_version 2>/dev/null |awk -F '-' '{print $1}' |awk -F 'v' '{print $2}' |awk -F '.' '{print $2$3}' 2>/dev/null)
-OP_LV=$(sed -n 1p $LAST_OPVER 2>/dev/null |awk -F '-' '{print $1}' |awk -F 'v' '{print $2}' |awk -F '.' '{print $2$3}' 2>/dev/null)
+OP_CV=$(rm -f /var/lock/opkg.lock && opkg status luci-app-openclash 2>/dev/null |grep 'Version' |awk -F '-' '{print $1}' |awk -F 'Version: ' '{print $2}' |awk -F '.' '{print $2$3}' 2>/dev/null)
+OP_LV=$(sed -n 1p "$LAST_OPVER" 2>/dev/null |awk -F '-' '{print $1}' |awk -F 'v' '{print $2}' |awk -F '.' '{print $2$3}' 2>/dev/null)
+RELEASE_BRANCH=$(uci -q get openclash.config.release_branch || echo "master")
+github_address_mod=$(uci -q get openclash.config.github_address_mod || echo 0)
+LOG_FILE="/tmp/openclash.log"
 set_lock
 
-if [ "$(expr "$OP_LV" \> "$OP_CV")" -eq 1 ] && [ -f "$LAST_OPVER" ]; then
+if [ -n "$OP_CV" ] && [ -n "$OP_LV" ] && [ "$(expr "$OP_LV" \> "$OP_CV")" -eq 1 ] && [ -f "$LAST_OPVER" ]; then
    LOG_OUT "Start Downloading【OpenClash - v$LAST_VER】..."
-   if pidof clash >/dev/null; then
-      curl -sL -m 10 --retry 2 https://github.com/vernesong/OpenClash/releases/download/v"$LAST_VER"/luci-app-openclash_"$LAST_VER"_all.ipk -o /tmp/openclash.ipk >/dev/null 2>&1
+   if [ "$github_address_mod" != "0" ]; then
+      if [ "$github_address_mod" == "https://cdn.jsdelivr.net/" ] || [ "$github_address_mod" == "https://fastly.jsdelivr.net/" ] || [ "$github_address_mod" == "https://testingcf.jsdelivr.net/" ]; then
+         curl -SsL --connect-timeout 10 -m 30 --speed-time 15 --speed-limit 1 --retry 2 "$github_address_mod"gh/vernesong/OpenClash@"$RELEASE_BRANCH"/luci-app-openclash_"$LAST_VER"_all.ipk -o /tmp/openclash.ipk 2>&1 | awk -v time="$(date "+%Y-%m-%d %H:%M:%S")" -v file="/tmp/openclash.ipk" '{print time "【" file "】Download Failed:【"$0"】"}' >> "$LOG_FILE"
+      elif [ "$github_address_mod" == "https://raw.fastgit.org/" ]; then
+         curl -SsL --connect-timeout 10 -m 30 --speed-time 15 --speed-limit 1 --retry 2 https://raw.fastgit.org/vernesong/OpenClash/"$RELEASE_BRANCH"/luci-app-openclash_"$LAST_VER"_all.ipk -o /tmp/openclash.ipk 2>&1 | awk -v time="$(date "+%Y-%m-%d %H:%M:%S")" -v file="/tmp/openclash.ipk" '{print time "【" file "】Download Failed:【"$0"】"}' >> "$LOG_FILE"
+      else
+         curl -SsL --connect-timeout 10 -m 30 --speed-time 15 --speed-limit 1 --retry 2 "$github_address_mod"https://raw.githubusercontent.com/vernesong/OpenClash/"$RELEASE_BRANCH"/luci-app-openclash_"$LAST_VER"_all.ipk -o /tmp/openclash.ipk 2>&1 | awk -v time="$(date "+%Y-%m-%d %H:%M:%S")" -v file="/tmp/openclash.ipk" '{print time "【" file "】Download Failed:【"$0"】"}' >> "$LOG_FILE"
+      fi
+   else
+      curl -SsL --connect-timeout 10 -m 30 --speed-time 15 --speed-limit 1 --retry 2 https://raw.githubusercontent.com/vernesong/OpenClash/"$RELEASE_BRANCH"/luci-app-openclash_"$LAST_VER"_all.ipk -o /tmp/openclash.ipk 2>&1 | awk -v time="$(date "+%Y-%m-%d %H:%M:%S")" -v file="/tmp/openclash.ipk" '{print time "【" file "】Download Failed:【"$0"】"}' >> "$LOG_FILE"
    fi
-   if [ "$?" -ne "0" ] || ! pidof clash >/dev/null; then
-      curl -sL -m 10 --retry 2 https://cdn.jsdelivr.net/gh/vernesong/OpenClash@master/luci-app-openclash_"$LAST_VER"_all.ipk -o /tmp/openclash.ipk >/dev/null 2>&1
+   if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+      curl -SsL --connect-timeout 10 -m 30 --speed-time 15 --speed-limit 1 --retry 2 https://ftp.jaist.ac.jp/pub/sourceforge.jp/storage/g/o/op/openclash/"$RELEASE_BRANCH"/luci-app-openclash_"$LAST_VER"_all.ipk -o /tmp/openclash.ipk 2>&1 | awk -v time="$(date "+%Y-%m-%d %H:%M:%S")" -v file="/tmp/openclash.ipk" '{print time "【" file "】Download Failed:【"$0"】"}' >> "$LOG_FILE"
+      curl_status=${PIPESTATUS[0]}
+   else
+      curl_status=0
    fi
-   if [ "$?" -eq "0" ] && [ -s "/tmp/openclash.ipk" ]; then
+   if [ "$curl_status" -eq 0 ] && [ -s "/tmp/openclash.ipk" ]; then
       LOG_OUT "【OpenClash - v$LAST_VER】Download Successful, Start Pre Update Test..."
-      opkg install /tmp/openclash.ipk --noaction >>$LOG_FILE
-      if [ "$?" -ne "0" ]; then
-         LOG_OUT "【OpenClash - v$LAST_VER】Pre Update Test Failed, The File is Saved in /tmp/opencrash.ipk, Please Try to Update Manually!"
-         sleep 3
-         SLOG_CLEAN
+      
+      if [ -z "$(opkg install /tmp/openclash.ipk --noaction 2>/dev/null |grep 'Upgrading luci-app-openclash on root' 2>/dev/null)" ]; then
+         LOG_OUT "【OpenClash - v$LAST_VER】Pre Update Test Failed, The File is Saved in /tmp/openclash.ipk, Please Try to Update Manually!"
+         if [ "$(uci -q get openclash.config.config_reload)" -eq 0 ]; then
+      	    /etc/init.d/openclash restart >/dev/null 2>&1 &
+         else
+            sleep 3
+            SLOG_CLEAN
+         fi
          del_lock
          exit 0
       fi
@@ -65,17 +84,17 @@ SLOG_CLEAN()
 }
 
 LOG_OUT "Uninstalling The Old Version, Please Do not Refresh The Page or Do Other Operations..."
-uci set openclash.config.enable=0
-uci commit openclash
+uci -q set openclash.config.enable=0
+uci -q commit openclash
 opkg remove --force-depends --force-remove luci-app-openclash
 LOG_OUT "Installing The New Version, Please Do Not Refresh The Page or Do Other Operations..."
 opkg install /tmp/openclash.ipk
-if [ "$?" -eq "0" ]; then
+if [ "$?" == "0" ]; then
    rm -rf /tmp/openclash.ipk >/dev/null 2>&1
    LOG_OUT "OpenClash Update Successful, About To Restart!"
    sleep 3
-   uci set openclash.config.enable=1
-   uci commit openclash
+   uci -q set openclash.config.enable=1
+   uci -q commit openclash
    /etc/init.d/openclash restart 2>/dev/null
 else
    LOG_OUT "OpenClash Update Failed, The File is Saved in /tmp/openclash.ipk, Please Try to Update Manually!"
@@ -90,28 +109,24 @@ EOF
    else
       LOG_OUT "【OpenClash - v$LAST_VER】Download Failed, Please Check The Network or Try Again Later!"
       rm -rf /tmp/openclash.ipk >/dev/null 2>&1
-      sleep 3
-      SLOG_CLEAN
-      if [ "$(uci get openclash.config.config_reload 2>/dev/null)" -eq 0 ]; then
-         uci set openclash.config.config_reload=1
-         uci commit openclash
-      	 /etc/init.d/openclash restart 2>/dev/null
+      if [ "$(uci -q get openclash.config.config_reload)" -eq 0 ]; then
+      	 /etc/init.d/openclash restart >/dev/null 2>&1 &
+      else
+         sleep 3
+         SLOG_CLEAN
       fi
    fi
 else
-   if [ ! -f "$LAST_OPVER" ]; then
+   if [ ! -f "$LAST_OPVER" ] || [ -z "$OP_CV" ] || [ -z "$OP_LV" ]; then
       LOG_OUT "Failed to Get Version Information, Please Try Again Later..."
-      sleep 3
-      SLOG_CLEAN
    else
       LOG_OUT "OpenClash Has not Been Updated, Stop Continuing!"
+   fi
+   if [ "$(uci -q get openclash.config.config_reload)" -eq 0 ]; then
+      /etc/init.d/openclash restart >/dev/null 2>&1 &
+   else
       sleep 3
       SLOG_CLEAN
-   fi
-   if [ "$(uci get openclash.config.config_reload 2>/dev/null)" -eq 0 ]; then
-      uci set openclash.config.config_reload=1
-      uci commit openclash
-      /etc/init.d/openclash restart 2>/dev/null
    fi
 fi
 del_lock
